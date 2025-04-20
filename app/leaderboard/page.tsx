@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Trophy, ArrowLeft, Medal, User, Star, RefreshCw } from "lucide-react"
 import { motion } from "framer-motion"
@@ -21,11 +21,16 @@ type GameScore = {
 
 export default function LeaderboardPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [scores, setScores] = useState<GameScore[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<"score" | "words">("score")
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0) // Used to force refresh
+
+  // Check if we need to refresh the leaderboard
+  const shouldRefresh =
+    searchParams.get("refresh") === "true" || localStorage.getItem("wlw-refresh-leaderboard") === "true"
 
   // Function to fetch leaderboard data
   const fetchLeaderboard = async () => {
@@ -65,6 +70,9 @@ export default function LeaderboardPage() {
       }
 
       setScores(data || [])
+
+      // Clear the refresh flag
+      localStorage.removeItem("wlw-refresh-leaderboard")
     } catch (error) {
       console.error("Error fetching leaderboard:", error)
       setError("Failed to load leaderboard. Please try again.")
@@ -107,12 +115,18 @@ export default function LeaderboardPage() {
       })
       .subscribe()
 
+    // If we should refresh, do it immediately
+    if (shouldRefresh) {
+      console.log("Should refresh flag detected, refreshing leaderboard")
+      fetchLeaderboard()
+    }
+
     // Clean up subscriptions when component unmounts
     return () => {
       supabase.removeChannel(scoresChannel)
       supabase.removeChannel(refreshChannel)
     }
-  }, [filter, refreshKey])
+  }, [filter, refreshKey, shouldRefresh])
 
   // Get level title
   const getLevelTitle = (level: number) => {

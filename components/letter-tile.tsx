@@ -1,5 +1,6 @@
 "use client"
 
+import { memo } from "react"
 import { motion } from "framer-motion"
 
 interface LetterTileProps {
@@ -9,7 +10,7 @@ interface LetterTileProps {
   position?: number
 }
 
-export function LetterTile({ letter, onClick, isSelected = false, position }: LetterTileProps) {
+export const LetterTile = memo(function LetterTile({ letter, onClick, isSelected = false, position }: LetterTileProps) {
   return (
     <motion.div
       className={`relative w-10 h-10 sm:w-14 sm:h-14 flex items-center justify-center text-xl font-bold rounded-lg cursor-pointer select-none
@@ -41,7 +42,7 @@ export function LetterTile({ letter, onClick, isSelected = false, position }: Le
       <div className="absolute inset-x-0 top-0 h-1/3 bg-white/10 rounded-t-lg"></div>
     </motion.div>
   )
-}
+})
 
 interface EmptyTileProps {
   onClick?: () => void

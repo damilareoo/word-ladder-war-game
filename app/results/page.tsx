@@ -24,6 +24,7 @@ export default function ResultsPage() {
   const [dataSource, setDataSource] = useState<"url" | "localStorage" | "none">("none")
   const [shareMessage, setShareMessage] = useState("")
   const [isTransitioning, setIsTransitioning] = useState(false)
+  const [leaderboardRefreshed, setLeaderboardRefreshed] = useState(false)
 
   useEffect(() => {
     // Get nickname from localStorage
@@ -80,27 +81,35 @@ export default function ResultsPage() {
       loadFromLocalStorage()
     }
 
-    // Trigger a leaderboard refresh by sending a notification to the Supabase channel
-    // This ensures the leaderboard is updated immediately after a game
-    const refreshLeaderboard = async () => {
-      try {
-        const supabase = getSupabaseBrowserClient()
-
-        // Send a notification to the leaderboard channel
-        await supabase.channel("leaderboard_refresh").send({
-          type: "broadcast",
-          event: "refresh",
-          payload: { timestamp: new Date().toISOString() },
-        })
-
-        console.log("Sent leaderboard refresh signal")
-      } catch (error) {
-        console.error("Error refreshing leaderboard:", error)
-      }
-    }
-
+    // Trigger a leaderboard refresh
     refreshLeaderboard()
   }, [router, searchParams])
+
+  // Function to refresh the leaderboard
+  const refreshLeaderboard = async () => {
+    if (leaderboardRefreshed) return
+
+    try {
+      const supabase = getSupabaseBrowserClient()
+
+      // Send a broadcast to refresh the leaderboard
+      await supabase.channel("leaderboard_refresh").send({
+        type: "broadcast",
+        event: "refresh",
+        payload: { timestamp: new Date().toISOString() },
+      })
+
+      console.log("Sent leaderboard refresh signal")
+
+      // Mark as refreshed to prevent multiple refreshes
+      setLeaderboardRefreshed(true)
+
+      // Set a flag in localStorage to indicate the leaderboard should be refreshed
+      localStorage.setItem("wlw-refresh-leaderboard", "true")
+    } catch (error) {
+      console.error("Error refreshing leaderboard:", error)
+    }
+  }
 
   // Function to load data from localStorage
   const loadFromLocalStorage = () => {
@@ -267,6 +276,11 @@ export default function ResultsPage() {
     }, 200)
   }
 
+  // Navigate to leaderboard with refresh flag
+  const handleViewLeaderboard = () => {
+    router.push("/leaderboard?refresh=true")
+  }
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-between bg-zinc-900 text-cream">
       <div className="flex flex-1 flex-col items-center justify-center p-4 w-full">
@@ -347,7 +361,7 @@ export default function ResultsPage() {
 
             <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} className="flex-1">
               <Button
-                onClick={() => router.push("/leaderboard")}
+                onClick={handleViewLeaderboard}
                 variant="outline"
                 className="w-full gap-1 border-zinc-700 text-zinc-300 hover:bg-zinc-800 rounded-xl text-sm h-10"
                 size="sm"

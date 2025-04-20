@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback, memo } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Clock, Send, Trophy, AlertCircle, ArrowLeft, X } from "lucide-react"
@@ -14,6 +14,9 @@ import { LetterTile } from "@/components/letter-tile"
 
 // Game duration in seconds
 const GAME_DURATION = 120
+
+// Memoized components for better performance
+const MemoizedLetterTile = memo(LetterTile)
 
 export default function GamePage() {
   const router = useRouter()
@@ -38,6 +41,7 @@ export default function GamePage() {
   const startTimeRef = useRef<number | null>(null)
   const validWordsRef = useRef<string[]>([])
   const gameDataSavedRef = useRef<boolean>(false)
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
 
   // Keep validWordsRef in sync with validWords state
   useEffect(() => {
@@ -86,10 +90,17 @@ export default function GamePage() {
       startTimeRef.current = Date.now()
     }
 
-    const timer = setInterval(() => {
+    // Clear any existing timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+    }
+
+    timerRef.current = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
-          clearInterval(timer)
+          if (timerRef.current) {
+            clearInterval(timerRef.current)
+          }
           endGame()
           return 0
         }
@@ -97,7 +108,11 @@ export default function GamePage() {
       })
     }, 1000)
 
-    return () => clearInterval(timer)
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+      }
+    }
   }, [gameStarted, gameEnded, isLoading])
 
   // Start game when user interacts
@@ -178,6 +193,18 @@ export default function GamePage() {
           console.error("Error saving to Supabase:", error)
         } else {
           console.log("Successfully saved to Supabase:", data)
+
+          // Trigger a leaderboard refresh by sending a broadcast
+          try {
+            await supabase.channel("leaderboard_refresh").send({
+              type: "broadcast",
+              event: "refresh",
+              payload: { timestamp: new Date().toISOString() },
+            })
+            console.log("Sent leaderboard refresh signal")
+          } catch (broadcastError) {
+            console.error("Error sending refresh broadcast:", broadcastError)
+          }
         }
       }
     } catch (error) {
@@ -189,6 +216,8 @@ export default function GamePage() {
     localStorage.setItem("wlw-last-word-count", wordCount.toString())
     localStorage.setItem("wlw-last-level", level.toString())
     localStorage.setItem("wlw-last-time", timeTaken.toString())
+    // Add a flag to indicate we need to refresh the leaderboard
+    localStorage.setItem("wlw-refresh-leaderboard", "true")
 
     console.log("Game data saved to localStorage:", {
       score: finalScore,
@@ -197,44 +226,44 @@ export default function GamePage() {
       timeTaken,
     })
 
-    // Navigate to results page with correct data - reduced delay
-    setTimeout(() => {
-      const url = `/results?score=${finalScore}&words=${wordCount}&level=${level}&time=${timeTaken}`
-      console.log("Navigating to results page:", url)
-      router.push(url)
-    }, 500) // Reduced from 1500ms to 500ms for faster transition
+    // Navigate to results page immediately
+    const url = `/results?score=${finalScore}&words=${wordCount}&level=${level}&time=${timeTaken}`
+    console.log("Navigating to results page:", url)
+    router.push(url)
   }, [mainWord, router])
 
   // Handle letter selection
-  const handleLetterClick = (letter: string, index: number) => {
-    if (!gameStarted) {
-      startGame()
-    }
+  const handleLetterClick = useCallback(
+    (letter: string, index: number) => {
+      if (!gameStarted) {
+        startGame()
+      }
 
-    if (gameEnded) return
+      if (gameEnded) return
 
-    setSelectedLetters([...selectedLetters, letter])
-    setSelectedIndices([...selectedIndices, index])
-  }
+      setSelectedLetters((prev) => [...prev, letter])
+      setSelectedIndices((prev) => [...prev, index])
+    },
+    [gameStarted, gameEnded],
+  )
 
   // Handle letter removal
-  const handleSelectedLetterClick = (index: number) => {
-    const newSelectedLetters = [...selectedLetters]
-    const newSelectedIndices = [...selectedIndices]
+  const handleSelectedLetterClick = useCallback((index: number) => {
+    setSelectedLetters((prev) => {
+      const newSelectedLetters = [...prev]
+      newSelectedLetters.splice(index, 1)
+      return newSelectedLetters
+    })
 
-    // Get the original index of the letter
-    const originalIndex = selectedIndices[index]
-
-    // Remove the letter from selected letters
-    newSelectedLetters.splice(index, 1)
-    newSelectedIndices.splice(index, 1)
-
-    setSelectedLetters(newSelectedLetters)
-    setSelectedIndices(newSelectedIndices)
-  }
+    setSelectedIndices((prev) => {
+      const newSelectedIndices = [...prev]
+      newSelectedIndices.splice(index, 1)
+      return newSelectedIndices
+    })
+  }, [])
 
   // Handle word submission
-  const handleSubmitWord = async () => {
+  const handleSubmitWord = useCallback(async () => {
     if (!gameStarted) {
       startGame()
       return
@@ -248,7 +277,7 @@ export default function GamePage() {
     // Check if word is at least 3 letters
     if (word.length < 3) {
       console.log("Word too short:", word)
-      addSubmittedWord(word, "invalid")
+      setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
       setSelectedLetters([])
       setSelectedIndices([])
       return
@@ -257,7 +286,7 @@ export default function GamePage() {
     // Check if word has already been submitted
     if (validWords.includes(word)) {
       console.log("Word already submitted:", word)
-      addSubmittedWord(word, "duplicate")
+      setSubmittedWords((prev) => [...prev, { word, status: "duplicate" }])
       setSelectedLetters([])
       setSelectedIndices([])
       return
@@ -271,7 +300,7 @@ export default function GamePage() {
       console.log("Word is valid:", word)
       const newValidWords = [...validWords, word]
       setValidWords(newValidWords)
-      addSubmittedWord(word, "valid")
+      setSubmittedWords((prev) => [...prev, { word, status: "valid" }])
 
       // Calculate and update score
       const newScore = calculateScore(newValidWords)
@@ -279,7 +308,7 @@ export default function GamePage() {
       setScore(newScore)
     } else {
       console.log("Word is invalid:", word)
-      addSubmittedWord(word, "invalid")
+      setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
     }
 
     setSelectedLetters([])
@@ -293,25 +322,20 @@ export default function GamePage() {
         }
       }, 100)
     }
-  }
+  }, [gameStarted, gameEnded, selectedLetters, validWords])
 
   // Clear current selection
-  const clearSelection = () => {
+  const clearSelection = useCallback(() => {
     setSelectedLetters([])
     setSelectedIndices([])
-  }
-
-  // Add word to submitted words list with animation
-  const addSubmittedWord = (word: string, status: "valid" | "invalid" | "duplicate") => {
-    setSubmittedWords((prev) => [...prev, { word, status }])
-  }
+  }, [])
 
   // Format time as MM:SS
-  const formatTime = (seconds: number) => {
+  const formatTime = useCallback((seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-  }
+  }, [])
 
   if (isLoading) {
     return (
@@ -464,11 +488,11 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* Letter Tiles */}
-      <div className="p-2 pt-1 pb-4 mb-4">
-        <div className="flex flex-wrap justify-center gap-1">
+      {/* Letter Tiles - Improved spacing for mobile */}
+      <div className="p-2 pt-1 pb-6 mb-6">
+        <div className="flex flex-wrap justify-center gap-2">
           {letters.map((letter, index) => (
-            <LetterTile
+            <MemoizedLetterTile
               key={`letter-${index}`}
               letter={letter}
               onClick={() => handleLetterClick(letter, index)}
