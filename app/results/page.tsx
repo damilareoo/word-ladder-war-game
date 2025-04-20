@@ -3,12 +3,12 @@
 import { useState, useEffect } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Trophy, Share2, BarChart3, ArrowRight, Home, Check, Copy } from "lucide-react"
+import { Trophy, BarChart3, ArrowRight, Home, Check, Copy } from "lucide-react"
 import { motion } from "framer-motion"
 import { getLevelInfo } from "@/lib/game-utils"
 import { Footer } from "@/components/footer"
 
-// Define a hardcoded production URL - replace with your actual production URL
+// Define a hardcoded production URL
 const PRODUCTION_URL = "https://word-ladder-war.vercel.app"
 
 export default function ResultsPage() {
@@ -22,6 +22,7 @@ export default function ResultsPage() {
   const [timeTaken, setTimeTaken] = useState(120)
   const [dataSource, setDataSource] = useState<"url" | "localStorage" | "none">("none")
   const [shareMessage, setShareMessage] = useState("")
+  const [isTransitioning, setIsTransitioning] = useState(false)
 
   useEffect(() => {
     // Get nickname from localStorage
@@ -143,121 +144,145 @@ export default function ResultsPage() {
     return `🔤 I scored ${score} points with ${wordCount} words in Word Ladder War and reached Level ${level}: ${levelInfo.title}! Can you beat me? #WordLadderWar`
   }
 
-  // Share results
+  // Share results - completely revised to handle permission errors better
   const handleShare = async () => {
     const shareText = getShareText()
     setShareMessage("")
 
-    // Get the current URL for sharing - use window.location.origin if available, otherwise use hardcoded URL
-    const shareUrl = typeof window !== "undefined" ? window.location.origin : PRODUCTION_URL
-
+    // Always default to clipboard method for more reliability
     try {
-      // Check if Web Share API is available and if we're in a secure context
+      // First try clipboard API as it's more widely supported
+      await copyToClipboard(shareText)
+
+      // Only try Web Share API if we're in a secure context and it's available
+      // This is now a secondary option after we've already copied to clipboard
       if (typeof navigator !== "undefined" && navigator.share && window.isSecureContext) {
         try {
+          // Get the current URL for sharing
+          const shareUrl = typeof window !== "undefined" ? window.location.origin : PRODUCTION_URL
+
           await navigator.share({
             title: "Word Ladder War Results",
             text: shareText,
             url: shareUrl,
           })
+
+          // If we get here, both clipboard and share worked
           setShareSuccess(true)
-          setTimeout(() => setShareSuccess(false), 3000)
-        } catch (shareError) {
-          console.error("Web Share API error:", shareError)
-          // Fall back to clipboard if sharing fails
-          await copyToClipboard(shareText)
+          setShareMessage("Shared successfully!")
+        } catch (shareError: any) {
+          // Web Share API failed, but clipboard worked, so still show success
+          console.log("Web Share API not available or failed:", shareError?.message || shareError)
+          // We already copied to clipboard, so keep the success state
         }
-      } else {
-        // Web Share API not available, use clipboard
-        await copyToClipboard(shareText)
       }
     } catch (err) {
-      console.error("Error in share handling:", err)
+      console.error("All sharing methods failed:", err)
       setShareMessage("Unable to share. Try copying your score manually.")
+      setShareSuccess(false)
+    }
+
+    // Clear success state after a delay
+    if (shareSuccess) {
+      setTimeout(() => {
+        setShareSuccess(false)
+        setShareMessage("")
+      }, 3000)
     }
   }
 
-  // Copy to clipboard helper
-  const copyToClipboard = async (text: string) => {
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard) {
+  // Copy to clipboard helper - improved with better fallbacks
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    // Try the modern clipboard API first
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      try {
         await navigator.clipboard.writeText(text)
         setShareSuccess(true)
         setShareMessage("Score copied to clipboard!")
-        setTimeout(() => {
-          setShareSuccess(false)
-          setShareMessage("")
-        }, 3000)
-      } else {
-        // Fallback for browsers without clipboard API
-        const textArea = document.createElement("textarea")
-        textArea.value = text
-        document.body.appendChild(textArea)
-        textArea.focus()
-        textArea.select()
-
-        try {
-          const successful = document.execCommand("copy")
-          if (successful) {
-            setShareSuccess(true)
-            setShareMessage("Score copied to clipboard!")
-            setTimeout(() => {
-              setShareSuccess(false)
-              setShareMessage("")
-            }, 3000)
-          } else {
-            throw new Error("Copy command failed")
-          }
-        } catch (err) {
-          setShareMessage("Could not copy to clipboard. Please try again.")
-        }
-
-        document.body.removeChild(textArea)
+        return true
+      } catch (clipErr) {
+        console.log("Clipboard API failed, trying fallback:", clipErr)
+        // Fall through to fallback
       }
-    } catch (clipErr) {
-      console.error("Could not copy text:", clipErr)
-      setShareMessage("Could not copy to clipboard. Please try again.")
     }
+
+    // Fallback for browsers without clipboard API
+    try {
+      const textArea = document.createElement("textarea")
+      textArea.value = text
+      // Make the textarea out of viewport
+      textArea.style.position = "fixed"
+      textArea.style.left = "-999999px"
+      textArea.style.top = "-999999px"
+      document.body.appendChild(textArea)
+      textArea.focus()
+      textArea.select()
+
+      const successful = document.execCommand("copy")
+      document.body.removeChild(textArea)
+
+      if (successful) {
+        setShareSuccess(true)
+        setShareMessage("Score copied to clipboard!")
+        return true
+      } else {
+        throw new Error("execCommand copy failed")
+      }
+    } catch (err) {
+      console.error("All clipboard methods failed:", err)
+      setShareMessage("Could not copy to clipboard. Please try again.")
+      setShareSuccess(false)
+      throw err
+    }
+  }
+
+  // Handle play again with smooth transition
+  const handlePlayAgain = () => {
+    setIsTransitioning(true)
+    // Use a shorter timeout for faster transition
+    setTimeout(() => {
+      router.push("/game")
+    }, 200)
   }
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-between bg-zinc-900 text-cream">
       <div className="flex flex-1 flex-col items-center justify-center p-4 w-full">
         <motion.div
-          className="w-full max-w-md space-y-6"
+          className="w-full max-w-md space-y-4 my-4" // Reduced space-y to fit better on mobile
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.5 }}
+          animate={{ opacity: isTransitioning ? 0 : 1 }}
+          transition={{ duration: 0.3 }}
         >
-          <motion.div className="space-y-6 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 p-6 text-center shadow-lg">
-            <h1 className="text-2xl font-bold">Game Over, {nickname}!</h1>
+          <motion.div className="space-y-4 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 p-4 text-center shadow-lg">
+            <h1 className="text-xl font-bold">Game Over, {nickname}!</h1>
 
-            <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div className="text-center">
-                  <p className="text-sm text-zinc-400">Score</p>
-                  <p className="text-3xl font-bold text-orange-500">{score}</p>
+                  <p className="text-xs text-zinc-400">Score</p>
+                  <p className="text-2xl font-bold text-orange-500">{score}</p>
                 </div>
 
                 <div className="text-center">
-                  <p className="text-sm text-zinc-400">Words</p>
-                  <p className="text-3xl font-bold text-green-500">{wordCount}</p>
+                  <p className="text-xs text-zinc-400">Words</p>
+                  <p className="text-2xl font-bold text-green-500">{wordCount}</p>
                 </div>
 
                 <div className="text-center">
-                  <p className="text-sm text-zinc-400">Time</p>
-                  <p className="text-3xl font-bold text-blue-500">{formatTime(timeTaken)}</p>
+                  <p className="text-xs text-zinc-400">Time</p>
+                  <p className="text-2xl font-bold text-blue-500">{formatTime(timeTaken)}</p>
                 </div>
               </div>
 
               <div className="space-y-1">
-                <p className="text-sm text-zinc-400">Current Level</p>
-                <div className="flex items-center justify-center gap-2">
-                  <Trophy className="h-5 w-5 text-yellow-500" />
-                  <p className="text-xl font-bold">{level}</p>
+                <p className="text-xs text-zinc-400">Current Level</p>
+                <div className="flex items-center justify-center gap-1">
+                  <Trophy className="h-4 w-4 text-yellow-500" />
+                  <p className="text-lg font-bold">{level}</p>
                 </div>
-                <p className="text-lg font-medium text-yellow-500">{levelInfo.title}</p>
-                <p className="text-sm text-zinc-400 line-clamp-2">{levelInfo.description}</p>
+                <p className="text-base font-medium text-yellow-500">{levelInfo.title}</p>
+                <p className="text-xs text-zinc-400 line-clamp-2">{levelInfo.description}</p>
               </div>
             </div>
 
@@ -265,41 +290,36 @@ export default function ResultsPage() {
               <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
                 <Button
                   onClick={handleShare}
-                  className="w-full gap-2 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 rounded-xl h-12 shadow-lg"
-                  size="lg"
+                  className="w-full gap-2 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 rounded-xl h-10 shadow-lg"
+                  size="sm"
                 >
                   {shareSuccess ? (
                     <>
-                      <Check className="h-5 w-5" />
-                      {shareMessage || "Shared!"}
+                      <Check className="h-4 w-4" />
+                      {shareMessage || "Copied to clipboard!"}
                     </>
                   ) : (
                     <>
-                      {typeof navigator !== "undefined" && navigator.share && window.isSecureContext ? (
-                        <Share2 className="h-5 w-5" />
-                      ) : (
-                        <Copy className="h-5 w-5" />
-                      )}
-                      {typeof navigator !== "undefined" && navigator.share && window.isSecureContext
-                        ? "Share My Score"
-                        : "Copy My Score"}
+                      <Copy className="h-4 w-4" />
+                      Copy My Score
                     </>
                   )}
                 </Button>
               </motion.div>
 
-              {shareMessage && !shareSuccess && <p className="text-sm text-red-400">{shareMessage}</p>}
+              {shareMessage && !shareSuccess && <p className="text-xs text-red-400">{shareMessage}</p>}
             </div>
           </motion.div>
 
-          <div className="flex gap-4">
+          <div className="flex gap-2">
             <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} className="flex-1">
               <Button
-                onClick={() => router.push("/game")}
-                className="w-full gap-2 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 rounded-xl shadow-lg"
+                onClick={handlePlayAgain}
+                className="w-full gap-1 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 rounded-xl shadow-lg text-sm h-10"
+                size="sm"
               >
                 Play Again
-                <ArrowRight className="h-4 w-4" />
+                <ArrowRight className="h-3 w-3" />
               </Button>
             </motion.div>
 
@@ -307,9 +327,10 @@ export default function ResultsPage() {
               <Button
                 onClick={() => router.push("/leaderboard")}
                 variant="outline"
-                className="w-full gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800 rounded-xl"
+                className="w-full gap-1 border-zinc-700 text-zinc-300 hover:bg-zinc-800 rounded-xl text-sm h-10"
+                size="sm"
               >
-                <BarChart3 className="h-4 w-4" />
+                <BarChart3 className="h-3 w-3" />
                 Leaderboard
               </Button>
             </motion.div>
@@ -319,9 +340,10 @@ export default function ResultsPage() {
             <Button
               onClick={() => router.push("/")}
               variant="ghost"
-              className="flex gap-2 text-zinc-500 hover:text-zinc-300"
+              className="flex gap-1 text-zinc-500 hover:text-zinc-300 text-sm h-8"
+              size="sm"
             >
-              <Home className="h-4 w-4" />
+              <Home className="h-3 w-3" />
               Home
             </Button>
           </motion.div>

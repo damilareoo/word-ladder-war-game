@@ -12,7 +12,7 @@ interface LetterTileProps {
 export function LetterTile({ letter, onClick, isSelected = false, position }: LetterTileProps) {
   return (
     <motion.div
-      className={`relative w-14 h-14 flex items-center justify-center text-2xl font-bold rounded-lg cursor-pointer select-none
+      className={`relative w-10 h-10 sm:w-14 sm:h-14 flex items-center justify-center text-xl font-bold rounded-lg cursor-pointer select-none
         ${isSelected ? "opacity-40 scale-95" : "opacity-100"}`}
       whileHover={!isSelected ? { scale: 1.05, y: -3 } : {}}
       whileTap={!isSelected ? { scale: 0.95 } : {}}
@@ -51,7 +51,7 @@ interface EmptyTileProps {
 export function EmptyTile({ onClick, letter }: EmptyTileProps) {
   return (
     <motion.div
-      className="w-14 h-14 flex items-center justify-center text-2xl font-bold bg-zinc-700/50 rounded-lg cursor-pointer"
+      className="w-10 h-10 sm:w-14 sm:h-14 flex items-center justify-center text-xl font-bold bg-zinc-700/50 rounded-lg cursor-pointer"
       whileHover={onClick ? { scale: 1.05, y: -3 } : {}}
       whileTap={onClick ? { scale: 0.95 } : {}}
       onClick={onClick}

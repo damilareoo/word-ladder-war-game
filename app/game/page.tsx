@@ -37,6 +37,7 @@ export default function GamePage() {
   const wordListRef = useRef<HTMLDivElement>(null)
   const startTimeRef = useRef<number | null>(null)
   const validWordsRef = useRef<string[]>([])
+  const gameDataSavedRef = useRef<boolean>(false)
 
   // Keep validWordsRef in sync with validWords state
   useEffect(() => {
@@ -118,8 +119,11 @@ export default function GamePage() {
 
   // End game and calculate final score
   const endGame = useCallback(async () => {
+    if (gameDataSavedRef.current) return // Prevent multiple saves
+
     console.log("Game ended")
     setGameEnded(true)
+    gameDataSavedRef.current = true
 
     // Get the current valid words
     const currentValidWords = validWordsRef.current
@@ -150,8 +154,8 @@ export default function GamePage() {
     const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
     const playerId = localStorage.getItem("wlw-player-id")
 
-    if (nickname && playerId) {
-      try {
+    try {
+      if (nickname && playerId) {
         const supabase = getSupabaseBrowserClient()
 
         // Make sure we're saving the correct data
@@ -167,16 +171,17 @@ export default function GamePage() {
 
         console.log("Saving game data to Supabase:", gameData)
 
-        const { data, error } = await supabase.from("game_scores").insert(gameData).select()
+        // Use upsert to ensure data is saved even if there's a conflict
+        const { data, error } = await supabase.from("game_scores").upsert(gameData).select()
 
         if (error) {
           console.error("Error saving to Supabase:", error)
         } else {
           console.log("Successfully saved to Supabase:", data)
         }
-      } catch (error) {
-        console.error("Error saving score:", error)
       }
+    } catch (error) {
+      console.error("Error saving score:", error)
     }
 
     // Store the game results in localStorage as a backup
@@ -192,12 +197,12 @@ export default function GamePage() {
       timeTaken,
     })
 
-    // Navigate to results page with correct data
+    // Navigate to results page with correct data - reduced delay
     setTimeout(() => {
       const url = `/results?score=${finalScore}&words=${wordCount}&level=${level}&time=${timeTaken}`
       console.log("Navigating to results page:", url)
       router.push(url)
-    }, 1500)
+    }, 500) // Reduced from 1500ms to 500ms for faster transition
   }, [mainWord, router])
 
   // Handle letter selection
@@ -326,56 +331,61 @@ export default function GamePage() {
     <main className="flex min-h-screen flex-col bg-zinc-900 text-cream">
       {/* Header */}
       <motion.header
-        className="sticky top-0 z-10 flex items-center justify-between bg-zinc-900/95 p-4 backdrop-blur-sm"
+        className="sticky top-0 z-10 flex items-center justify-between bg-zinc-900/95 p-3 backdrop-blur-sm"
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
       >
-        <Button variant="ghost" size="icon" onClick={() => router.push("/")} className="text-zinc-400 hover:text-cream">
-          <ArrowLeft className="h-5 w-5" />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => router.push("/")}
+          className="text-zinc-400 hover:text-cream h-8 w-8"
+        >
+          <ArrowLeft className="h-4 w-4" />
         </Button>
 
         <motion.div
-          className="flex items-center gap-2 rounded-full bg-zinc-800 px-3 py-1.5"
+          className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1"
           initial={{ scale: 0.9 }}
           animate={{ scale: 1 }}
           transition={{ delay: 0.1 }}
         >
-          <Clock className="h-4 w-4 text-orange-500" />
-          <span className={`font-mono text-sm font-bold ${timeLeft <= 10 ? "text-red-500" : "text-cream"}`}>
+          <Clock className="h-3 w-3 text-orange-500" />
+          <span className={`font-mono text-xs font-bold ${timeLeft <= 10 ? "text-red-500" : "text-cream"}`}>
             {formatTime(timeLeft)}
           </span>
         </motion.div>
 
         <motion.div
-          className="flex items-center gap-2 rounded-full bg-zinc-800 px-3 py-1.5"
+          className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1"
           initial={{ scale: 0.9 }}
           animate={{ scale: 1 }}
           transition={{ delay: 0.2 }}
         >
-          <Trophy className="h-4 w-4 text-green-500" />
-          <span className="font-mono text-sm font-bold">{validWords.length}</span>
+          <Trophy className="h-3 w-3 text-green-500" />
+          <span className="font-mono text-xs font-bold">{validWords.length}</span>
         </motion.div>
       </motion.header>
 
       {/* Main Word and Score */}
       <motion.div
-        className="flex flex-col items-center justify-center p-4 text-center"
+        className="flex flex-col items-center justify-center p-2 text-center"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
       >
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-cream">{mainWord}</h1>
-        <p className="mt-2 max-w-md text-sm text-zinc-400 line-clamp-2">{mainWordDefinition}</p>
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-cream">{mainWord}</h1>
+        <p className="mt-1 max-w-md text-xs text-zinc-400 line-clamp-2">{mainWordDefinition}</p>
 
         {/* Display current score */}
-        <div className="mt-3 px-6 py-1.5 bg-gradient-to-r from-orange-600/30 to-orange-500/30 rounded-full shadow-md border border-orange-500/30">
-          <span className="text-xl font-bold text-orange-500">Score: {score}</span>
+        <div className="mt-2 px-4 py-1 bg-gradient-to-r from-orange-600/30 to-orange-500/30 rounded-full shadow-md border border-orange-500/30">
+          <span className="text-base font-bold text-orange-500">Score: {score}</span>
         </div>
       </motion.div>
 
       {/* Word List */}
-      <div ref={wordListRef} className="flex-1 space-y-2 overflow-y-auto p-4" style={{ maxHeight: "30vh" }}>
+      <div ref={wordListRef} className="flex-1 space-y-1 overflow-y-auto p-2" style={{ maxHeight: "25vh" }}>
         <AnimatePresence>
           {submittedWords.map((item, index) => (
             <motion.div
@@ -384,7 +394,7 @@ export default function GamePage() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
-              className={`rounded-xl p-2 text-center font-medium ${
+              className={`rounded-xl p-1 text-center font-medium text-sm ${
                 item.status === "valid"
                   ? "bg-green-500/20 text-green-400"
                   : item.status === "duplicate"
@@ -399,26 +409,26 @@ export default function GamePage() {
 
         {!gameStarted && !gameEnded && (
           <motion.div
-            className="mt-8 text-center text-zinc-500"
+            className="mt-4 text-center text-zinc-500"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.5 }}
           >
-            <AlertCircle className="mx-auto mb-2 h-6 w-6" />
-            <p>Tap on letters to form words</p>
+            <AlertCircle className="mx-auto mb-1 h-5 w-5" />
+            <p className="text-sm">Tap on letters to form words</p>
           </motion.div>
         )}
       </div>
 
       {/* Selected Letters and Submit Button */}
-      <div className="p-3">
-        <div className="flex flex-col gap-2">
+      <div className="p-2">
+        <div className="flex flex-col gap-1">
           <div className="flex items-center justify-between">
-            <div className="flex flex-wrap gap-1 min-h-10">
+            <div className="flex flex-wrap gap-1 min-h-8">
               {selectedLetters.map((letter, index) => (
                 <motion.div
                   key={`selected-${index}`}
-                  className="w-10 h-10 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-md flex items-center justify-center text-lg font-bold cursor-pointer shadow-md"
+                  className="w-8 h-8 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-md flex items-center justify-center text-base font-bold cursor-pointer shadow-md"
                   onClick={() => handleSelectedLetterClick(index)}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -429,24 +439,24 @@ export default function GamePage() {
                 </motion.div>
               ))}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-1">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={clearSelection}
-                className="h-10 text-zinc-400 border-zinc-700"
+                className="h-8 text-zinc-400 border-zinc-700 text-xs"
                 disabled={selectedLetters.length === 0}
               >
-                <X className="h-4 w-4 mr-1" />
+                <X className="h-3 w-3 mr-1" />
                 Clear
               </Button>
               <Button
                 onClick={handleSubmitWord}
                 size="sm"
-                className="h-10 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-md"
+                className="h-8 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-md text-xs"
                 disabled={selectedLetters.length < 3}
               >
-                <Send className="h-4 w-4 mr-1" />
+                <Send className="h-3 w-3 mr-1" />
                 Enter
               </Button>
             </div>
@@ -455,8 +465,8 @@ export default function GamePage() {
       </div>
 
       {/* Letter Tiles */}
-      <div className="p-4 pt-2 pb-6">
-        <div className="flex flex-wrap justify-center gap-2">
+      <div className="p-2 pt-1 pb-4">
+        <div className="flex flex-wrap justify-center gap-1">
           {letters.map((letter, index) => (
             <LetterTile
               key={`letter-${index}`}
@@ -469,8 +479,8 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* Footer only shown when game ends */}
-      {gameEnded && <Footer />}
+      {/* Footer always shown */}
+      <Footer />
     </main>
   )
 }
