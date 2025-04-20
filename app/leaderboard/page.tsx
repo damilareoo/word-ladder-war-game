@@ -80,7 +80,8 @@ export default function LeaderboardPage() {
     // Set up real-time subscription for leaderboard updates
     const supabase = getSupabaseBrowserClient()
 
-    const subscription = supabase
+    // Listen for changes to the game_scores table
+    const scoresChannel = supabase
       .channel("game_scores_changes")
       .on(
         "postgres_changes",
@@ -97,9 +98,19 @@ export default function LeaderboardPage() {
       )
       .subscribe()
 
-    // Clean up subscription when component unmounts
+    // Listen for the custom refresh event from the results page
+    const refreshChannel = supabase
+      .channel("leaderboard_refresh")
+      .on("broadcast", { event: "refresh" }, () => {
+        console.log("Received refresh signal, updating leaderboard")
+        fetchLeaderboard()
+      })
+      .subscribe()
+
+    // Clean up subscriptions when component unmounts
     return () => {
-      supabase.removeChannel(subscription)
+      supabase.removeChannel(scoresChannel)
+      supabase.removeChannel(refreshChannel)
     }
   }, [filter, refreshKey])
 
@@ -242,7 +253,9 @@ export default function LeaderboardPage() {
         )}
       </div>
 
-      <Footer />
+      <div className="mt-auto">
+        <Footer />
+      </div>
     </main>
   )
 }

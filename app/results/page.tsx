@@ -7,6 +7,7 @@ import { Trophy, BarChart3, ArrowRight, Home, Check, Copy } from "lucide-react"
 import { motion } from "framer-motion"
 import { getLevelInfo } from "@/lib/game-utils"
 import { Footer } from "@/components/footer"
+import { getSupabaseBrowserClient } from "@/lib/supabase"
 
 // Define a hardcoded production URL
 const PRODUCTION_URL = "https://word-ladder-war.vercel.app"
@@ -78,6 +79,27 @@ export default function ResultsPage() {
     else {
       loadFromLocalStorage()
     }
+
+    // Trigger a leaderboard refresh by sending a notification to the Supabase channel
+    // This ensures the leaderboard is updated immediately after a game
+    const refreshLeaderboard = async () => {
+      try {
+        const supabase = getSupabaseBrowserClient()
+
+        // Send a notification to the leaderboard channel
+        await supabase.channel("leaderboard_refresh").send({
+          type: "broadcast",
+          event: "refresh",
+          payload: { timestamp: new Date().toISOString() },
+        })
+
+        console.log("Sent leaderboard refresh signal")
+      } catch (error) {
+        console.error("Error refreshing leaderboard:", error)
+      }
+    }
+
+    refreshLeaderboard()
   }, [router, searchParams])
 
   // Function to load data from localStorage

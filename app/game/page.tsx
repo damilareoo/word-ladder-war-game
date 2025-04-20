@@ -465,7 +465,7 @@ export default function GamePage() {
       </div>
 
       {/* Letter Tiles */}
-      <div className="p-2 pt-1 pb-4">
+      <div className="p-2 pt-1 pb-4 mb-4">
         <div className="flex flex-wrap justify-center gap-1">
           {letters.map((letter, index) => (
             <LetterTile
@@ -479,8 +479,10 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* Footer always shown */}
-      <Footer />
+      {/* Footer with proper spacing */}
+      <div className="mt-auto">
+        <Footer />
+      </div>
     </main>
   )
 }
