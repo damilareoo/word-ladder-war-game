@@ -1,30 +1,11 @@
-# Word ladder game design
+Get ready to sharpen your vocabulary and climb the word ladder in **Word Ladder War**! 🔥 Start with a simple word, twist one letter at a time, and race against your own best score to reach the target word. 🏁 With combo multipliers, a global leaderboard, and lightning‑fast gameplay, every move counts—so flex your mental muscles and show off your word‑wizardry! ✨
 
-*Automatically synced with your [v0.dev](https://v0.dev) deployments*
-
-[![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-black?style=for-the-badge&logo=vercel)](https://vercel.com/damilares-projects-fc682e5f/word-ladder-game.vercel.app)
-[![Built with v0](https://img.shields.io/badge/Built%20with-v0.dev-black?style=for-the-badge)](https://v0.dev/chat/projects/Av8gtUbV4Ns)
-
-## Overview
-
-This repository will stay in sync with your deployed chats on [v0.dev](https://v0.dev).
-Any changes you make to your deployed app will be automatically pushed to this repository from [v0.dev](https://v0.dev).
-
-## Deployment
-
-Your project is live at:
-
-**[https://vercel.com/damilares-projects-fc682e5f/word-ladder-game.vercel.app](https://vercel.com/damilares-projects-fc682e5f/word-ladder-game.vercel.app)**
-
-## Build your app
-
-Continue building your app on:
-
-**[https://v0.dev/chat/projects/Av8gtUbV4Ns](https://v0.dev/chat/projects/Av8gtUbV4Ns)**
-
-## How It Works
-
-1. Create and modify your project using [v0.dev](https://v0.dev)
-2. Deploy your chats from the v0 interface
-3. Changes are automatically pushed to this repository
-4. Vercel deploys the latest version from this repository
+| 🎲 Mode              | Single‑player word‑ladder puzzle—transform one word into another by changing one letter at a time              |
+|----------------------|----------------------------------------------------------------------------------------------------------------|
+| 🧩 Objective         | Climb the ladder: build as many valid words from the start word until you reach the target or run out of moves   |
+| 🌟 Scoring           | Earn points per valid transformation; higher rungs = bigger combos                                               |
+| 🏆 Leaderboard       | Enter your nickname → see your rank on the global scoreboard                                                     |
+| 🚀 Quickstart        | `git clone https://github.com/damilareoo/word-ladder-war-game.git`<br>`pnpm install`<br>`pnpm dev` (→ localhost:3000) |
+| 🛠 Tech Stack        | Next.js, React, Tailwind CSS, Socket.io, Node.js + Express, custom JSON dictionaries                              |
+| 🌐 Live Demo         | https://word-ladder-war.vercel.app                                                                                  |
+| 🤝 Contribute        | Fork → `git checkout -b feat/your-feature` → commit → PR                                                             |
