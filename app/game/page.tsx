@@ -14,6 +14,10 @@ import { LetterTile } from "@/components/letter-tile"
 import { refreshLeaderboard } from "@/lib/realtime-utils"
 import { trackGameStart, trackGameComplete, trackWordSubmitted } from "@/lib/analytics"
 
+// Prevent prerendering of this page
+export const dynamic = "force-dynamic"
+export const dynamicParams = true
+
 // Game duration in seconds
 const GAME_DURATION = 120
 
@@ -47,9 +51,63 @@ export default function GamePage() {
   const startTimeRef = useRef<number | null>(null)
   const validWordsRef = useRef<string[]>([])
   const gameDataSavedRef = useRef<boolean>(false)
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const endGameTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const supabase = useRef(getSupabaseBrowserClient()).current
+  const timerRef = useRef<any>(null)
+  const endGameTimeoutRef = useRef<any>(null)
+  const supabaseRef = useRef<any>(null)
+
+  // Save game data to Supabase
+  const saveGameData = useCallback(
+    async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
+      if (!supabaseRef.current) return false
+
+      const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
+      const playerId = localStorage.getItem("wlw-player-id")
+
+      if (!nickname || !playerId) {
+        console.error("Missing player information")
+        return false
+      }
+
+      try {
+        // Game data to save
+        const gameData = {
+          player_id: playerId,
+          nickname,
+          score: finalScore,
+          word_count: wordCount,
+          time_taken: timeTaken,
+          main_word: mainWord,
+          level: level,
+        }
+
+        console.log("Saving game data to Supabase:", gameData)
+
+        // Use upsert to ensure data is saved even if there's a conflict
+        const { data, error } = await supabaseRef.current.from("game_scores").upsert(gameData).select()
+
+        if (error) {
+          console.error("Error saving to Supabase:", error)
+          return false
+        }
+
+        console.log("Successfully saved to Supabase:", data)
+
+        // Trigger a leaderboard refresh
+        await refreshLeaderboard({
+          score: finalScore,
+          nickname,
+          wordCount,
+          level,
+        })
+
+        return true
+      } catch (error) {
+        console.error("Error saving score:", error)
+        return false
+      }
+    },
+    [mainWord],
+  )
 
   // End game and calculate final score
   const endGame = useCallback(async () => {
@@ -78,7 +136,9 @@ export default function GamePage() {
     const level = calculateLevel(wordCount)
 
     // Track game completion
-    trackGameComplete(finalScore, wordCount, level)
+    if (typeof window !== "undefined") {
+      trackGameComplete(finalScore, wordCount, level)
+    }
 
     console.log("Game summary:", {
       score: finalScore,
@@ -88,15 +148,17 @@ export default function GamePage() {
     })
 
     // Store the game results in localStorage immediately
-    localStorage.setItem("wlw-last-score", finalScore.toString())
-    localStorage.setItem("wlw-last-word-count", wordCount.toString())
-    localStorage.setItem("wlw-last-level", level.toString())
-    localStorage.setItem("wlw-last-time", timeTaken.toString())
-    localStorage.setItem("wlw-game-timestamp", Date.now().toString())
+    if (typeof window !== "undefined") {
+      localStorage.setItem("wlw-last-score", finalScore.toString())
+      localStorage.setItem("wlw-last-word-count", wordCount.toString())
+      localStorage.setItem("wlw-last-level", level.toString())
+      localStorage.setItem("wlw-last-time", timeTaken.toString())
+      localStorage.setItem("wlw-game-timestamp", Date.now().toString())
+    }
 
     // Save game data to Supabase in the background
     saveGameData(finalScore, wordCount, level, timeTaken).then((success) => {
-      if (!success) {
+      if (!success && typeof window !== "undefined") {
         console.log("Failed to save to Supabase, will retry on results page")
         localStorage.setItem("wlw-retry-save", "true")
       }
@@ -115,12 +177,19 @@ export default function GamePage() {
 
   // Initialize game with optimized loading
   useEffect(() => {
+    // Initialize Supabase client
+    if (typeof window !== "undefined") {
+      supabaseRef.current = getSupabaseBrowserClient()
+    }
+
     const initGame = async () => {
       // Check if user has a nickname
-      const nickname = localStorage.getItem("wlw-nickname")
-      if (!nickname) {
-        router.push("/nickname")
-        return
+      if (typeof window !== "undefined") {
+        const nickname = localStorage.getItem("wlw-nickname")
+        if (!nickname) {
+          router.push("/nickname")
+          return
+        }
       }
 
       try {
@@ -134,7 +203,9 @@ export default function GamePage() {
         setLetters(shuffledLetters)
 
         // Store the main word in localStorage for reference
-        localStorage.setItem("wlw-main-word", selectedWord)
+        if (typeof window !== "undefined") {
+          localStorage.setItem("wlw-main-word", selectedWord)
+        }
 
         // Get definition for the main word
         const definition = await getWordDefinition(selectedWord)
@@ -150,37 +221,38 @@ export default function GamePage() {
     initGame()
 
     // Add event listeners for better mobile performance
-    document.addEventListener("touchstart", handleTouchStart)
-    document.addEventListener("touchend", handleTouchEnd)
-
-    // Cleanup function
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
+    if (typeof window !== "undefined") {
+      const handleTouchStart = () => {
+        setTouchStartTime(Date.now())
       }
-      if (endGameTimeoutRef.current) {
-        clearTimeout(endGameTimeoutRef.current)
+
+      const handleTouchEnd = () => {
+        if (touchStartTime && Date.now() - touchStartTime < 300) {
+          // This was a quick tap, no need to do anything special
+        }
+        setTouchStartTime(null)
       }
-      document.removeEventListener("touchstart", handleTouchStart)
-      document.removeEventListener("touchend", handleTouchEnd)
-    }
-  }, [router])
 
-  // Touch event handlers for better mobile performance
-  const handleTouchStart = useCallback(() => {
-    setTouchStartTime(Date.now())
-  }, [])
+      document.addEventListener("touchstart", handleTouchStart)
+      document.addEventListener("touchend", handleTouchEnd)
 
-  const handleTouchEnd = useCallback(() => {
-    if (touchStartTime && Date.now() - touchStartTime < 300) {
-      // This was a quick tap, no need to do anything special
+      // Cleanup function
+      return () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current)
+        }
+        if (endGameTimeoutRef.current) {
+          clearTimeout(endGameTimeoutRef.current)
+        }
+        document.removeEventListener("touchstart", handleTouchStart)
+        document.removeEventListener("touchend", handleTouchEnd)
+      }
     }
-    setTouchStartTime(null)
-  }, [touchStartTime])
+  }, [router, touchStartTime])
 
   // Timer logic with optimized interval
   useEffect(() => {
-    if (!gameStarted || gameEnded || isLoading) return
+    if (!gameStarted || gameEnded || isLoading || typeof window === "undefined") return
 
     if (startTimeRef.current === null) {
       startTimeRef.current = Date.now()
@@ -191,31 +263,23 @@ export default function GamePage() {
       clearInterval(timerRef.current)
     }
 
-    // Use requestAnimationFrame for smoother timer updates
-    let lastUpdateTime = Date.now()
-    const updateTimer = () => {
-      const now = Date.now()
-      if (now - lastUpdateTime >= 1000) {
-        lastUpdateTime = now
-        setTimeLeft((prev) => {
-          if (prev <= 1) {
-            endGame()
-            return 0
+    timerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          if (timerRef.current) {
+            clearInterval(timerRef.current)
           }
-          return prev - 1
-        })
-      }
-
-      if (!gameEnded) {
-        timerRef.current = requestAnimationFrame(updateTimer) as unknown as NodeJS.Timeout
-      }
-    }
-
-    timerRef.current = requestAnimationFrame(updateTimer) as unknown as NodeJS.Timeout
+          // End game immediately when timer reaches 0
+          endGame()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
 
     return () => {
       if (timerRef.current) {
-        cancelAnimationFrame(timerRef.current as unknown as number)
+        clearInterval(timerRef.current)
       }
     }
   }, [gameStarted, gameEnded, isLoading, endGame])
@@ -227,9 +291,11 @@ export default function GamePage() {
       setGameStarted(true)
 
       // Track game start after a small delay to ensure analytics is loaded
-      setTimeout(() => {
-        trackGameStart(mainWord)
-      }, 100)
+      if (typeof window !== "undefined") {
+        setTimeout(() => {
+          trackGameStart(mainWord)
+        }, 100)
+      }
     }
   }, [gameStarted, gameEnded, mainWord])
 
@@ -240,58 +306,6 @@ export default function GamePage() {
       setScore(newScore)
     }
   }, [validWords])
-
-  // Save game data to Supabase
-  const saveGameData = useCallback(
-    async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
-      const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
-      const playerId = localStorage.getItem("wlw-player-id")
-
-      if (!nickname || !playerId) {
-        console.error("Missing player information")
-        return false
-      }
-
-      try {
-        // Game data to save
-        const gameData = {
-          player_id: playerId,
-          nickname,
-          score: finalScore,
-          word_count: wordCount,
-          time_taken: timeTaken,
-          main_word: mainWord,
-          level: level,
-        }
-
-        console.log("Saving game data to Supabase:", gameData)
-
-        // Use upsert to ensure data is saved even if there's a conflict
-        const { data, error } = await supabase.from("game_scores").upsert(gameData).select()
-
-        if (error) {
-          console.error("Error saving to Supabase:", error)
-          return false
-        }
-
-        console.log("Successfully saved to Supabase:", data)
-
-        // Trigger a leaderboard refresh
-        await refreshLeaderboard({
-          score: finalScore,
-          nickname,
-          wordCount,
-          level,
-        })
-
-        return true
-      } catch (error) {
-        console.error("Error saving score:", error)
-        return false
-      }
-    },
-    [mainWord, supabase],
-  )
 
   // Handle letter selection with debounce for better mobile performance
   const handleLetterClick = useCallback(
@@ -349,7 +363,9 @@ export default function GamePage() {
       setSelectedIndices([])
 
       // Track invalid word submission
-      trackWordSubmitted(word, false)
+      if (typeof window !== "undefined") {
+        trackWordSubmitted(word, false)
+      }
       return
     }
 
@@ -361,7 +377,9 @@ export default function GamePage() {
       setSelectedIndices([])
 
       // Track duplicate word submission
-      trackWordSubmitted(word, false)
+      if (typeof window !== "undefined") {
+        trackWordSubmitted(word, false)
+      }
       return
     }
 
@@ -390,13 +408,17 @@ export default function GamePage() {
       setScore(newScore)
 
       // Track valid word submission
-      trackWordSubmitted(word, true)
+      if (typeof window !== "undefined") {
+        trackWordSubmitted(word, true)
+      }
     } else {
       // Word is already marked as invalid in the loading state
       console.log("Word is invalid:", word)
 
       // Track invalid word submission
-      trackWordSubmitted(word, false)
+      if (typeof window !== "undefined") {
+        trackWordSubmitted(word, false)
+      }
     }
 
     setSelectedLetters([])

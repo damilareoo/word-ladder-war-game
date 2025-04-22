@@ -14,7 +14,9 @@ type GameEvent = {
  * Track a custom game event
  */
 export function trackGameEvent({ name, properties }: GameEvent): void {
-  // Only track if analytics is available
+  // Only track if analytics is available and we're on the client
+  if (typeof window === "undefined") return
+
   if (isAnalyticsAvailable()) {
     try {
       window.va.track(name, properties)
@@ -33,6 +35,8 @@ export function trackGameEvent({ name, properties }: GameEvent): void {
  * Track when a user starts a game
  */
 export function trackGameStart(mainWord: string): void {
+  if (typeof window === "undefined") return
+
   trackGameEvent({
     name: "game_started",
     properties: {
@@ -46,6 +50,8 @@ export function trackGameStart(mainWord: string): void {
  * Track when a user completes a game
  */
 export function trackGameComplete(score: number, wordCount: number, level: number): void {
+  if (typeof window === "undefined") return
+
   trackGameEvent({
     name: "game_completed",
     properties: {
@@ -61,6 +67,8 @@ export function trackGameComplete(score: number, wordCount: number, level: numbe
  * Track when a user submits a valid word
  */
 export function trackWordSubmitted(word: string, isValid: boolean): void {
+  if (typeof window === "undefined") return
+
   trackGameEvent({
     name: "word_submitted",
     properties: {

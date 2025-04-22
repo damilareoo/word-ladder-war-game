@@ -8,6 +8,8 @@ let isSubscribed = false
  * Get a singleton channel for leaderboard updates
  */
 export function getLeaderboardChannel() {
+  if (typeof window === "undefined") return null
+
   if (!leaderboardChannel) {
     const supabase = getSupabaseBrowserClient()
     leaderboardChannel = supabase.channel("leaderboard_updates")
@@ -19,16 +21,18 @@ export function getLeaderboardChannel() {
  * Ensure the channel is subscribed (only once)
  */
 export async function ensureChannelSubscribed() {
+  if (typeof window === "undefined") return false
+
   if (!isSubscribed) {
     const channel = getLeaderboardChannel()
-    if (channel.state !== "joined") {
+    if (channel && channel.state !== "joined") {
       await channel.subscribe()
       isSubscribed = true
-    } else {
+    } else if (channel) {
       isSubscribed = true
     }
   }
-  return true
+  return isSubscribed
 }
 
 /**
@@ -40,12 +44,16 @@ export async function refreshLeaderboard(data: {
   wordCount: number
   level: number
 }) {
+  if (typeof window === "undefined") return false
+
   try {
     // First ensure the channel is subscribed
     await ensureChannelSubscribed()
 
     // Then send the message
     const channel = getLeaderboardChannel()
+    if (!channel) return false
+
     await channel.send({
       type: "broadcast",
       event: "refresh",
@@ -68,6 +76,8 @@ export async function refreshLeaderboard(data: {
  * Clean up channel when no longer needed
  */
 export function cleanupLeaderboardChannel() {
+  if (typeof window === "undefined") return
+
   if (leaderboardChannel) {
     const supabase = getSupabaseBrowserClient()
     supabase.removeChannel(leaderboardChannel)
