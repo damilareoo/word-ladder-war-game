@@ -35,6 +35,12 @@ export const metadata: Metadata = {
     images: ["/site-image.png"],
     creator: "@damilare_oo",
   },
+  viewport: {
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 1,
+    userScalable: false,
+  },
     generator: 'v0.dev'
 }
 
@@ -61,10 +67,15 @@ export default function RootLayout({
         <meta name="twitter:description" content="A fast-paced word game where you form words from a single word" />
         <meta name="twitter:image" content={`${PRODUCTION_URL}/site-image.png`} />
         <meta name="twitter:creator" content="@damilare_oo" />
+
+        {/* Mobile optimizations */}
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="theme-color" content="#18181b" />
       </head>
       <body className={inter.className}>
         <Suspense>{children}</Suspense>
-        <Analytics />
+        <Analytics debug={process.env.NODE_ENV !== "production"} />
       </body>
     </html>
   )

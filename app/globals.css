@@ -37,6 +37,9 @@
 body {
   @apply bg-background text-foreground;
   font-feature-settings: "rlig" 1, "calt" 1;
+  touch-action: manipulation; /* Improve touch response */
+  -webkit-tap-highlight-color: transparent; /* Remove tap highlight on mobile */
+  overscroll-behavior: none; /* Prevent pull-to-refresh on mobile */
 }
 
 /* Custom colors */
@@ -76,4 +79,26 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+/* Mobile optimizations */
+.touch-manipulation {
+  touch-action: manipulation;
+}
+
+/* Prevent text selection on game elements */
+.select-none {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Improve scrolling on mobile */
+.overscroll-contain {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent pull-to-refresh on mobile */
+.overscroll-none {
+  overscroll-behavior: none;
 }

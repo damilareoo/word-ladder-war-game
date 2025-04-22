@@ -1,3 +1,10 @@
+/**
+ * Safely check if Vercel Analytics is available
+ */
+const isAnalyticsAvailable = (): boolean => {
+  return typeof window !== "undefined" && typeof window.va !== "undefined" && typeof window.va.track === "function"
+}
+
 type GameEvent = {
   name: string
   properties?: Record<string, string | number | boolean>
@@ -7,10 +14,18 @@ type GameEvent = {
  * Track a custom game event
  */
 export function trackGameEvent({ name, properties }: GameEvent): void {
-  // Check if window and Vercel Analytics are available
-  if (typeof window !== "undefined" && window.va) {
-    // Track the event using Vercel Analytics
-    window.va.track(name, properties)
+  // Only track if analytics is available
+  if (isAnalyticsAvailable()) {
+    try {
+      window.va.track(name, properties)
+      console.log(`[Analytics] Tracked event: ${name}`, properties)
+    } catch (error) {
+      // Silently fail if tracking fails
+      console.error("[Analytics] Error tracking event:", error)
+    }
+  } else {
+    // Log that analytics is not available
+    console.log(`[Analytics] Not available for event: ${name}`)
   }
 }
 
