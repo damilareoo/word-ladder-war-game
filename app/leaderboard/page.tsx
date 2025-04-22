@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Trophy, ArrowLeft, Medal, User, Star, RefreshCw } from "lucide-react"
@@ -27,66 +27,83 @@ export default function LeaderboardPage() {
   const [filter, setFilter] = useState<"score" | "words">("score")
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0) // Used to force refresh
+  const [lastRefreshTime, setLastRefreshTime] = useState(Date.now())
+
+  const supabaseRef = useRef(getSupabaseBrowserClient())
+  const refreshAttemptsRef = useRef(0)
+  const maxRefreshAttempts = 3
 
   // Check if we need to refresh the leaderboard
   const shouldRefresh =
-    searchParams.get("refresh") === "true" || localStorage.getItem("wlw-refresh-leaderboard") === "true"
+    searchParams.get("refresh") === "true" ||
+    localStorage.getItem("wlw-refresh-leaderboard") === "true" ||
+    Date.now() - lastRefreshTime > 10000 // Force refresh every 10 seconds
 
   // Function to fetch leaderboard data
-  const fetchLeaderboard = async () => {
-    try {
-      setLoading(true)
-      setError(null)
+  const fetchLeaderboard = useCallback(
+    async (forceRefresh = false) => {
+      try {
+        if (loading && !forceRefresh) return
 
-      const supabase = getSupabaseBrowserClient()
+        setLoading(true)
+        setError(null)
 
-      // Determine sort order based on filter
-      const orderColumn = filter === "score" ? "score" : "word_count"
-      const ascending = false // Always descending for both score and words
+        const supabase = supabaseRef.current
 
-      console.log(`Fetching leaderboard sorted by ${orderColumn} in descending order`)
+        // Determine sort order based on filter
+        const orderColumn = filter === "score" ? "score" : "word_count"
+        const ascending = false // Always descending for both score and words
 
-      // Make sure we're getting scores > 0 for score and word_count filters
-      let query = supabase.from("game_scores").select("*")
+        console.log(`Fetching leaderboard sorted by ${orderColumn} in descending order`)
 
-      if (filter === "score") {
-        query = query.gt("score", 0)
-      } else if (filter === "words") {
-        query = query.gt("word_count", 0)
-      }
+        // Make sure we're getting scores > 0 for score and word_count filters
+        let query = supabase.from("game_scores").select("*")
 
-      const { data, error } = await query.order(orderColumn, { ascending }).limit(50)
+        if (filter === "score") {
+          query = query.gt("score", 0)
+        } else if (filter === "words") {
+          query = query.gt("word_count", 0)
+        }
 
-      if (error) {
-        console.error("Supabase query error:", error)
+        // Add a cache-busting parameter to avoid stale data
+        const { data, error } = await query.order(orderColumn, { ascending }).limit(50).throwOnError()
+
+        if (error) {
+          console.error("Supabase query error:", error)
+          setError("Failed to load leaderboard. Please try again.")
+          throw error
+        }
+
+        console.log("Leaderboard data count:", data?.length || 0)
+
+        if (!data || data.length === 0) {
+          console.log("No leaderboard data found")
+        }
+
+        setScores(data || [])
+        setLastRefreshTime(Date.now())
+
+        // Clear the refresh flag
+        localStorage.removeItem("wlw-refresh-leaderboard")
+      } catch (error) {
+        console.error("Error fetching leaderboard:", error)
         setError("Failed to load leaderboard. Please try again.")
-        throw error
+
+        // Retry if we haven't reached the maximum attempts
+        refreshAttemptsRef.current += 1
+        if (refreshAttemptsRef.current < maxRefreshAttempts) {
+          setTimeout(() => fetchLeaderboard(true), 1000)
+        }
+      } finally {
+        setLoading(false)
       }
+    },
+    [filter, loading],
+  )
 
-      console.log("Leaderboard data count:", data?.length || 0)
-
-      if (!data || data.length === 0) {
-        console.log("No leaderboard data found")
-      }
-
-      setScores(data || [])
-
-      // Clear the refresh flag
-      localStorage.removeItem("wlw-refresh-leaderboard")
-    } catch (error) {
-      console.error("Error fetching leaderboard:", error)
-      setError("Failed to load leaderboard. Please try again.")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Fetch leaderboard data when component mounts or filter changes
+  // Set up real-time subscription for leaderboard updates
   useEffect(() => {
-    fetchLeaderboard()
-
-    // Set up real-time subscription for leaderboard updates
-    const supabase = getSupabaseBrowserClient()
+    const supabase = supabaseRef.current
 
     // Listen for changes to the game_scores table
     const scoresChannel = supabase
@@ -98,10 +115,10 @@ export default function LeaderboardPage() {
           schema: "public",
           table: "game_scores",
         },
-        () => {
+        (payload) => {
           // Refresh the leaderboard when data changes
-          console.log("Game scores changed, refreshing leaderboard")
-          fetchLeaderboard()
+          console.log("Game scores changed, refreshing leaderboard:", payload)
+          fetchLeaderboard(true)
         },
       )
       .subscribe()
@@ -109,24 +126,41 @@ export default function LeaderboardPage() {
     // Listen for the custom refresh event from the results page
     const refreshChannel = supabase
       .channel("leaderboard_refresh")
-      .on("broadcast", { event: "refresh" }, () => {
-        console.log("Received refresh signal, updating leaderboard")
-        fetchLeaderboard()
+      .on("broadcast", { event: "refresh" }, (payload) => {
+        console.log("Received refresh signal, updating leaderboard:", payload)
+        fetchLeaderboard(true)
       })
       .subscribe()
-
-    // If we should refresh, do it immediately
-    if (shouldRefresh) {
-      console.log("Should refresh flag detected, refreshing leaderboard")
-      fetchLeaderboard()
-    }
 
     // Clean up subscriptions when component unmounts
     return () => {
       supabase.removeChannel(scoresChannel)
       supabase.removeChannel(refreshChannel)
     }
-  }, [filter, refreshKey, shouldRefresh])
+  }, [fetchLeaderboard])
+
+  // Fetch leaderboard data when component mounts or filter changes
+  useEffect(() => {
+    // If we should refresh, do it immediately
+    if (shouldRefresh) {
+      console.log("Should refresh flag detected, refreshing leaderboard")
+      fetchLeaderboard(true)
+    } else {
+      fetchLeaderboard(false)
+    }
+
+    // Set up a periodic refresh
+    const refreshInterval = setInterval(() => {
+      if (Date.now() - lastRefreshTime > 10000) {
+        // Refresh every 10 seconds
+        fetchLeaderboard(true)
+      }
+    }, 10000)
+
+    return () => {
+      clearInterval(refreshInterval)
+    }
+  }, [filter, refreshKey, shouldRefresh, fetchLeaderboard, lastRefreshTime])
 
   // Get level title
   const getLevelTitle = (level: number) => {
@@ -137,7 +171,9 @@ export default function LeaderboardPage() {
 
   // Manual refresh function
   const handleRefresh = () => {
-    setRefreshKey((prev) => prev + 1) // Increment refresh key to trigger useEffect
+    refreshAttemptsRef.current = 0
+    setRefreshKey((prev) => prev + 1)
+    fetchLeaderboard(true)
   }
 
   return (
@@ -232,7 +268,7 @@ export default function LeaderboardPage() {
                 key={score.id}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.03 }}
+                transition={{ delay: Math.min(index * 0.02, 0.5) }} // Cap the delay to avoid too much staggering
                 className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-zinc-800 to-zinc-900 p-2 shadow-md"
               >
                 <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 text-xs font-bold">

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Trophy, BarChart3, ArrowRight, Home, Check, Copy } from "lucide-react"
@@ -25,6 +25,160 @@ export default function ResultsPage() {
   const [shareMessage, setShareMessage] = useState("")
   const [isTransitioning, setIsTransitioning] = useState(false)
   const [leaderboardRefreshed, setLeaderboardRefreshed] = useState(false)
+
+  const supabaseRef = useRef(getSupabaseBrowserClient())
+  const refreshAttemptsRef = useRef(0)
+  const maxRefreshAttempts = 3
+
+  // Function to load data from localStorage
+  const loadFromLocalStorage = useCallback(() => {
+    const lastScore = localStorage.getItem("wlw-last-score")
+    const lastWordCount = localStorage.getItem("wlw-last-word-count")
+    const lastLevel = localStorage.getItem("wlw-last-level")
+    const lastTime = localStorage.getItem("wlw-last-time")
+
+    console.log("localStorage values:", {
+      lastScore,
+      lastWordCount,
+      lastLevel,
+      lastTime,
+    })
+
+    if (lastScore && lastWordCount && lastLevel && lastTime) {
+      try {
+        const parsedScore = Number.parseInt(lastScore, 10)
+        const parsedWords = Number.parseInt(lastWordCount, 10)
+        const parsedLevel = Number.parseInt(lastLevel, 10)
+        const parsedTime = Number.parseInt(lastTime, 10)
+
+        console.log("Parsed localStorage values:", {
+          parsedScore,
+          parsedWords,
+          parsedLevel,
+          parsedTime,
+        })
+
+        if (isNaN(parsedScore) || isNaN(parsedWords) || isNaN(parsedLevel) || isNaN(parsedTime)) {
+          throw new Error("Invalid localStorage values")
+        }
+
+        setScore(parsedScore)
+        setWordCount(parsedWords)
+        setLevel(parsedLevel)
+        setTimeTaken(parsedTime)
+        setDataSource("localStorage")
+
+        console.log("Using localStorage for game results")
+        return { score: parsedScore, wordCount: parsedWords, level: parsedLevel, timeTaken: parsedTime }
+      } catch (error) {
+        console.error("Error parsing localStorage values:", error)
+        setDataSource("none")
+        return null
+      }
+    } else {
+      console.log("No game results found in localStorage")
+      setDataSource("none")
+      return null
+    }
+  }, [])
+
+  // Save game data to Supabase
+  const saveGameData = useCallback(
+    async (gameData: {
+      score: number
+      wordCount: number
+      level: number
+      timeTaken: number
+    }) => {
+      const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
+      const playerId = localStorage.getItem("wlw-player-id")
+      const mainWord = localStorage.getItem("wlw-main-word") || "UNKNOWN"
+
+      if (!nickname || !playerId) {
+        console.error("Missing player information")
+        return false
+      }
+
+      try {
+        const supabase = supabaseRef.current
+
+        // Game data to save
+        const supabaseData = {
+          player_id: playerId,
+          nickname,
+          score: gameData.score,
+          word_count: gameData.wordCount,
+          time_taken: gameData.timeTaken,
+          main_word: mainWord,
+          level: gameData.level,
+        }
+
+        console.log("Saving game data to Supabase:", supabaseData)
+
+        // Use upsert to ensure data is saved even if there's a conflict
+        const { data, error } = await supabase.from("game_scores").upsert(supabaseData).select()
+
+        if (error) {
+          console.error("Error saving to Supabase:", error)
+          return false
+        }
+
+        console.log("Successfully saved to Supabase:", data)
+        return true
+      } catch (error) {
+        console.error("Error saving score:", error)
+        return false
+      }
+    },
+    [],
+  )
+
+  // Function to refresh the leaderboard
+  const refreshLeaderboard = useCallback(
+    async (gameData?: {
+      score: number
+      wordCount: number
+      level: number
+    }) => {
+      if (leaderboardRefreshed && refreshAttemptsRef.current >= maxRefreshAttempts) return
+
+      try {
+        refreshAttemptsRef.current += 1
+        const supabase = supabaseRef.current
+        const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
+
+        // Send a broadcast to refresh the leaderboard
+        await supabase.channel("leaderboard_refresh").send({
+          type: "broadcast",
+          event: "refresh",
+          payload: {
+            timestamp: Date.now(),
+            score: gameData?.score || score,
+            nickname,
+            wordCount: gameData?.wordCount || wordCount,
+            level: gameData?.level || level,
+          },
+        })
+
+        console.log("Sent leaderboard refresh signal")
+
+        // Mark as refreshed to prevent multiple refreshes
+        setLeaderboardRefreshed(true)
+
+        // Set a flag in localStorage to indicate the leaderboard should be refreshed
+        localStorage.setItem("wlw-refresh-leaderboard", "true")
+        localStorage.setItem("wlw-refresh-timestamp", Date.now().toString())
+      } catch (error) {
+        console.error("Error refreshing leaderboard:", error)
+
+        // Retry if we haven't reached the maximum attempts
+        if (refreshAttemptsRef.current < maxRefreshAttempts) {
+          setTimeout(() => refreshLeaderboard(gameData), 1000)
+        }
+      }
+    },
+    [leaderboardRefreshed, score, wordCount, level],
+  )
 
   useEffect(() => {
     // Get nickname from localStorage
@@ -70,95 +224,49 @@ export default function ResultsPage() {
         setDataSource("url")
 
         console.log("Using URL params for game results")
+
+        // Check if we need to retry saving to Supabase
+        if (localStorage.getItem("wlw-retry-save") === "true") {
+          console.log("Retrying save to Supabase")
+          saveGameData({ score: parsedScore, wordCount: parsedWords, level: parsedLevel, timeTaken: parsedTime }).then(
+            (success) => {
+              if (success) {
+                localStorage.removeItem("wlw-retry-save")
+              }
+            },
+          )
+        }
+
+        // Refresh the leaderboard with the current game data
+        refreshLeaderboard({ score: parsedScore, wordCount: parsedWords, level: parsedLevel })
       } catch (error) {
         console.error("Error parsing URL params:", error)
         // Fall back to localStorage if URL params are invalid
-        loadFromLocalStorage()
+        const localData = loadFromLocalStorage()
+        if (localData) {
+          refreshLeaderboard(localData)
+        }
       }
     }
     // Otherwise, try to get from localStorage as fallback
     else {
-      loadFromLocalStorage()
-    }
-
-    // Trigger a leaderboard refresh
-    refreshLeaderboard()
-  }, [router, searchParams])
-
-  // Function to refresh the leaderboard
-  const refreshLeaderboard = async () => {
-    if (leaderboardRefreshed) return
-
-    try {
-      const supabase = getSupabaseBrowserClient()
-
-      // Send a broadcast to refresh the leaderboard
-      await supabase.channel("leaderboard_refresh").send({
-        type: "broadcast",
-        event: "refresh",
-        payload: { timestamp: new Date().toISOString() },
-      })
-
-      console.log("Sent leaderboard refresh signal")
-
-      // Mark as refreshed to prevent multiple refreshes
-      setLeaderboardRefreshed(true)
-
-      // Set a flag in localStorage to indicate the leaderboard should be refreshed
-      localStorage.setItem("wlw-refresh-leaderboard", "true")
-    } catch (error) {
-      console.error("Error refreshing leaderboard:", error)
-    }
-  }
-
-  // Function to load data from localStorage
-  const loadFromLocalStorage = () => {
-    const lastScore = localStorage.getItem("wlw-last-score")
-    const lastWordCount = localStorage.getItem("wlw-last-word-count")
-    const lastLevel = localStorage.getItem("wlw-last-level")
-    const lastTime = localStorage.getItem("wlw-last-time")
-
-    console.log("localStorage values:", {
-      lastScore,
-      lastWordCount,
-      lastLevel,
-      lastTime,
-    })
-
-    if (lastScore && lastWordCount && lastLevel && lastTime) {
-      try {
-        const parsedScore = Number.parseInt(lastScore, 10)
-        const parsedWords = Number.parseInt(lastWordCount, 10)
-        const parsedLevel = Number.parseInt(lastLevel, 10)
-        const parsedTime = Number.parseInt(lastTime, 10)
-
-        console.log("Parsed localStorage values:", {
-          parsedScore,
-          parsedWords,
-          parsedLevel,
-          parsedTime,
-        })
-
-        if (isNaN(parsedScore) || isNaN(parsedWords) || isNaN(parsedLevel) || isNaN(parsedTime)) {
-          throw new Error("Invalid localStorage values")
-        }
-
-        setScore(parsedScore)
-        setWordCount(parsedWords)
-        setLevel(parsedLevel)
-        setTimeTaken(parsedTime)
-        setDataSource("localStorage")
-
-        console.log("Using localStorage for game results")
-      } catch (error) {
-        console.error("Error parsing localStorage values:", error)
-        setDataSource("none")
+      const localData = loadFromLocalStorage()
+      if (localData) {
+        refreshLeaderboard(localData)
       }
-    } else {
-      console.log("No game results found in localStorage")
-      setDataSource("none")
     }
-  }
+
+    // Set up a timer to periodically refresh the leaderboard
+    const refreshInterval = setInterval(() => {
+      if (!leaderboardRefreshed) {
+        refreshLeaderboard()
+      }
+    }, 2000)
+
+    return () => {
+      clearInterval(refreshInterval)
+    }
+  }, [router, searchParams, loadFromLocalStorage, refreshLeaderboard, saveGameData, leaderboardRefreshed])
 
   // Get level info
   const levelInfo = getLevelInfo(level)
@@ -273,12 +381,14 @@ export default function ResultsPage() {
     // Use a shorter timeout for faster transition
     setTimeout(() => {
       router.push("/game")
-    }, 200)
+    }, 100)
   }
 
   // Navigate to leaderboard with refresh flag
   const handleViewLeaderboard = () => {
-    router.push("/leaderboard?refresh=true")
+    // Force a final leaderboard refresh before navigating
+    refreshLeaderboard()
+    router.push("/leaderboard?refresh=true&ts=" + Date.now())
   }
 
   return (
@@ -288,7 +398,7 @@ export default function ResultsPage() {
           className="w-full max-w-md space-y-4 my-4" // Reduced space-y to fit better on mobile
           initial={{ opacity: 0 }}
           animate={{ opacity: isTransitioning ? 0 : 1 }}
-          transition={{ duration: 0.3 }}
+          transition={{ duration: 0.2 }}
         >
           <motion.div className="space-y-4 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 p-4 text-center shadow-lg">
             <h1 className="text-xl font-bold">Game Over, {nickname}!</h1>

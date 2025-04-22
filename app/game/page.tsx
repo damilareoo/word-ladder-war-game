@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback, memo } from "react"
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Clock, Send, Trophy, AlertCircle, ArrowLeft, X } from "lucide-react"
@@ -17,6 +17,9 @@ const GAME_DURATION = 120
 
 // Memoized components for better performance
 const MemoizedLetterTile = memo(LetterTile)
+
+// Memoized motion components
+const MotionHeader = memo(({ children, ...props }: any) => <motion.header {...props}>{children}</motion.header>)
 
 export default function GamePage() {
   const router = useRouter()
@@ -42,6 +45,8 @@ export default function GamePage() {
   const validWordsRef = useRef<string[]>([])
   const gameDataSavedRef = useRef<boolean>(false)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const endGameTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const supabaseRef = useRef(getSupabaseBrowserClient())
 
   // Keep validWordsRef in sync with validWords state
   useEffect(() => {
@@ -80,6 +85,16 @@ export default function GamePage() {
     }
 
     initGame()
+
+    // Cleanup function
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+      }
+      if (endGameTimeoutRef.current) {
+        clearTimeout(endGameTimeoutRef.current)
+      }
+    }
   }, [router])
 
   // Timer logic
@@ -101,6 +116,7 @@ export default function GamePage() {
           if (timerRef.current) {
             clearInterval(timerRef.current)
           }
+          // End game immediately when timer reaches 0
           endGame()
           return 0
         }
@@ -116,21 +132,84 @@ export default function GamePage() {
   }, [gameStarted, gameEnded, isLoading])
 
   // Start game when user interacts
-  const startGame = () => {
+  const startGame = useCallback(() => {
     if (!gameStarted && !gameEnded) {
       console.log("Game started")
       setGameStarted(true)
     }
-  }
+  }, [gameStarted, gameEnded])
 
   // Update score whenever validWords changes
   useEffect(() => {
     if (validWords.length > 0) {
       const newScore = calculateScore(validWords)
-      console.log(`Updating score to ${newScore} based on ${validWords.length} words`)
       setScore(newScore)
     }
   }, [validWords])
+
+  // Save game data to Supabase
+  const saveGameData = useCallback(
+    async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
+      const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
+      const playerId = localStorage.getItem("wlw-player-id")
+
+      if (!nickname || !playerId) {
+        console.error("Missing player information")
+        return false
+      }
+
+      try {
+        const supabase = supabaseRef.current
+
+        // Game data to save
+        const gameData = {
+          player_id: playerId,
+          nickname,
+          score: finalScore,
+          word_count: wordCount,
+          time_taken: timeTaken,
+          main_word: mainWord,
+          level: level,
+        }
+
+        console.log("Saving game data to Supabase:", gameData)
+
+        // Use upsert to ensure data is saved even if there's a conflict
+        const { data, error } = await supabase.from("game_scores").upsert(gameData).select()
+
+        if (error) {
+          console.error("Error saving to Supabase:", error)
+          return false
+        }
+
+        console.log("Successfully saved to Supabase:", data)
+
+        // Trigger a leaderboard refresh by sending a broadcast
+        try {
+          await supabase.channel("leaderboard_refresh").send({
+            type: "broadcast",
+            event: "refresh",
+            payload: {
+              timestamp: new Date().toISOString(),
+              score: finalScore,
+              nickname,
+              wordCount,
+              level,
+            },
+          })
+          console.log("Sent leaderboard refresh signal")
+        } catch (broadcastError) {
+          console.error("Error sending refresh broadcast:", broadcastError)
+        }
+
+        return true
+      } catch (error) {
+        console.error("Error saving score:", error)
+        return false
+      }
+    },
+    [mainWord],
+  )
 
   // End game and calculate final score
   const endGame = useCallback(async () => {
@@ -165,72 +244,27 @@ export default function GamePage() {
       timeTaken,
     })
 
-    // Save game results to Supabase
-    const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
-    const playerId = localStorage.getItem("wlw-player-id")
-
-    try {
-      if (nickname && playerId) {
-        const supabase = getSupabaseBrowserClient()
-
-        // Make sure we're saving the correct data
-        const gameData = {
-          player_id: playerId,
-          nickname,
-          score: finalScore,
-          word_count: wordCount,
-          time_taken: timeTaken,
-          main_word: mainWord,
-          level: level,
-        }
-
-        console.log("Saving game data to Supabase:", gameData)
-
-        // Use upsert to ensure data is saved even if there's a conflict
-        const { data, error } = await supabase.from("game_scores").upsert(gameData).select()
-
-        if (error) {
-          console.error("Error saving to Supabase:", error)
-        } else {
-          console.log("Successfully saved to Supabase:", data)
-
-          // Trigger a leaderboard refresh by sending a broadcast
-          try {
-            await supabase.channel("leaderboard_refresh").send({
-              type: "broadcast",
-              event: "refresh",
-              payload: { timestamp: new Date().toISOString() },
-            })
-            console.log("Sent leaderboard refresh signal")
-          } catch (broadcastError) {
-            console.error("Error sending refresh broadcast:", broadcastError)
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Error saving score:", error)
-    }
-
-    // Store the game results in localStorage as a backup
+    // Store the game results in localStorage immediately
     localStorage.setItem("wlw-last-score", finalScore.toString())
     localStorage.setItem("wlw-last-word-count", wordCount.toString())
     localStorage.setItem("wlw-last-level", level.toString())
     localStorage.setItem("wlw-last-time", timeTaken.toString())
-    // Add a flag to indicate we need to refresh the leaderboard
     localStorage.setItem("wlw-refresh-leaderboard", "true")
+    localStorage.setItem("wlw-game-timestamp", Date.now().toString())
 
-    console.log("Game data saved to localStorage:", {
-      score: finalScore,
-      wordCount,
-      level,
-      timeTaken,
+    // Save game data to Supabase in the background
+    saveGameData(finalScore, wordCount, level, timeTaken).then((success) => {
+      if (!success) {
+        console.log("Failed to save to Supabase, will retry on results page")
+        localStorage.setItem("wlw-retry-save", "true")
+      }
     })
 
     // Navigate to results page immediately
-    const url = `/results?score=${finalScore}&words=${wordCount}&level=${level}&time=${timeTaken}`
+    const url = `/results?score=${finalScore}&words=${wordCount}&level=${level}&time=${timeTaken}&ts=${Date.now()}`
     console.log("Navigating to results page:", url)
     router.push(url)
-  }, [mainWord, router])
+  }, [router, saveGameData])
 
   // Handle letter selection
   const handleLetterClick = useCallback(
@@ -244,7 +278,7 @@ export default function GamePage() {
       setSelectedLetters((prev) => [...prev, letter])
       setSelectedIndices((prev) => [...prev, index])
     },
-    [gameStarted, gameEnded],
+    [gameStarted, gameEnded, startGame],
   )
 
   // Handle letter removal
@@ -322,7 +356,7 @@ export default function GamePage() {
         }
       }, 100)
     }
-  }, [gameStarted, gameEnded, selectedLetters, validWords])
+  }, [gameStarted, gameEnded, selectedLetters, validWords, startGame])
 
   // Clear current selection
   const clearSelection = useCallback(() => {
@@ -336,6 +370,19 @@ export default function GamePage() {
     const secs = seconds % 60
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
   }, [])
+
+  // Memoize the letter tiles to prevent unnecessary re-renders
+  const letterTiles = useMemo(() => {
+    return letters.map((letter, index) => (
+      <MemoizedLetterTile
+        key={`letter-${index}`}
+        letter={letter}
+        onClick={() => handleLetterClick(letter, index)}
+        isSelected={selectedIndices.includes(index)}
+        position={index}
+      />
+    ))
+  }, [letters, selectedIndices, handleLetterClick])
 
   if (isLoading) {
     return (
@@ -354,7 +401,7 @@ export default function GamePage() {
   return (
     <main className="flex min-h-screen flex-col bg-zinc-900 text-cream">
       {/* Header */}
-      <motion.header
+      <MotionHeader
         className="sticky top-0 z-10 flex items-center justify-between bg-zinc-900/95 p-3 backdrop-blur-sm"
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -390,7 +437,7 @@ export default function GamePage() {
           <Trophy className="h-3 w-3 text-green-500" />
           <span className="font-mono text-xs font-bold">{validWords.length}</span>
         </motion.div>
-      </motion.header>
+      </MotionHeader>
 
       {/* Main Word and Score */}
       <motion.div
@@ -417,7 +464,7 @@ export default function GamePage() {
               initial={{ opacity: 0, y: 20, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
+              transition={{ duration: 0.2 }}
               className={`rounded-xl p-1 text-center font-medium text-sm ${
                 item.status === "valid"
                   ? "bg-green-500/20 text-green-400"
@@ -463,7 +510,7 @@ export default function GamePage() {
                 </motion.div>
               ))}
             </div>
-            <div className="flex gap-1">
+            <div className="flex gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -489,18 +536,8 @@ export default function GamePage() {
       </div>
 
       {/* Letter Tiles - Improved spacing for mobile */}
-      <div className="p-2 pt-1 pb-6 mb-6">
-        <div className="flex flex-wrap justify-center gap-2">
-          {letters.map((letter, index) => (
-            <MemoizedLetterTile
-              key={`letter-${index}`}
-              letter={letter}
-              onClick={() => handleLetterClick(letter, index)}
-              isSelected={selectedIndices.includes(index)}
-              position={index}
-            />
-          ))}
-        </div>
+      <div className="p-2 pt-1 pb-8 mb-8">
+        <div className="flex flex-wrap justify-center gap-3">{letterTiles}</div>
       </div>
 
       {/* Footer with proper spacing */}
