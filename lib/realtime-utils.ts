@@ -11,8 +11,13 @@ export function getLeaderboardChannel() {
   if (typeof window === "undefined") return null
 
   if (!leaderboardChannel) {
-    const supabase = getSupabaseBrowserClient()
-    leaderboardChannel = supabase.channel("leaderboard_updates")
+    try {
+      const supabase = getSupabaseBrowserClient()
+      leaderboardChannel = supabase.channel("leaderboard_updates")
+    } catch (error) {
+      console.error("Error creating leaderboard channel:", error)
+      return null
+    }
   }
   return leaderboardChannel
 }
@@ -24,12 +29,17 @@ export async function ensureChannelSubscribed() {
   if (typeof window === "undefined") return false
 
   if (!isSubscribed) {
-    const channel = getLeaderboardChannel()
-    if (channel && channel.state !== "joined") {
-      await channel.subscribe()
-      isSubscribed = true
-    } else if (channel) {
-      isSubscribed = true
+    try {
+      const channel = getLeaderboardChannel()
+      if (channel && channel.state !== "joined") {
+        await channel.subscribe()
+        isSubscribed = true
+      } else if (channel) {
+        isSubscribed = true
+      }
+    } catch (error) {
+      console.error("Error subscribing to channel:", error)
+      return false
     }
   }
   return isSubscribed
@@ -79,9 +89,13 @@ export function cleanupLeaderboardChannel() {
   if (typeof window === "undefined") return
 
   if (leaderboardChannel) {
-    const supabase = getSupabaseBrowserClient()
-    supabase.removeChannel(leaderboardChannel)
-    leaderboardChannel = null
-    isSubscribed = false
+    try {
+      const supabase = getSupabaseBrowserClient()
+      supabase.removeChannel(leaderboardChannel)
+      leaderboardChannel = null
+      isSubscribed = false
+    } catch (error) {
+      console.error("Error cleaning up leaderboard channel:", error)
+    }
   }
 }

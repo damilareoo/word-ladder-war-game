@@ -35,12 +35,13 @@ export const LetterTile = memo(function LetterTile({ letter, onClick, isSelected
     <motion.div
       className={`relative w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center text-xl font-bold rounded-lg cursor-pointer select-none touch-manipulation
         ${isSelected ? "opacity-40 scale-95" : "opacity-100"}`}
-      whileHover={!isSelected ? { scale: 1.03 } : undefined}
-      whileTap={!isSelected ? { scale: 0.97 } : undefined}
+      whileTap={{ scale: 0.97 }}
       onClick={handleClick}
       {...animationProps}
       style={{
         WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
+        touchAction: "manipulation", // Improve touch handling
+        userSelect: "none", // Prevent text selection
       }}
     >
       {/* Base shadow - simplified for better performance */}
@@ -69,11 +70,12 @@ export const EmptyTile = memo(function EmptyTile({ onClick, letter }: EmptyTileP
   return (
     <motion.div
       className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center text-xl font-bold bg-zinc-700/50 rounded-lg cursor-pointer touch-manipulation"
-      whileHover={onClick ? { scale: 1.03 } : undefined}
-      whileTap={onClick ? { scale: 0.97 } : undefined}
+      whileTap={{ scale: 0.97 }}
       onClick={onClick}
       style={{
         WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
+        touchAction: "manipulation", // Improve touch handling
+        userSelect: "none", // Prevent text selection
       }}
     >
       {letter}

@@ -45,7 +45,11 @@ export default function GamePage() {
   const [letters, setLetters] = useState<string[]>([])
   const [selectedLetters, setSelectedLetters] = useState<string[]>([])
   const [selectedIndices, setSelectedIndices] = useState<number[]>([])
-  const [touchStartTime, setTouchStartTime] = useState<number | null>(null)
+
+  // Refs for touch handling
+  const lastTouchTimeRef = useRef<number>(0)
+  const touchCooldownRef = useRef<boolean>(false)
+  const processingSubmissionRef = useRef<boolean>(false)
 
   const wordListRef = useRef<HTMLDivElement>(null)
   const startTimeRef = useRef<number | null>(null)
@@ -54,60 +58,58 @@ export default function GamePage() {
   const timerRef = useRef<any>(null)
   const endGameTimeoutRef = useRef<any>(null)
   const supabaseRef = useRef<any>(null)
+  const mainWordRef = useRef<string>("")
 
   // Save game data to Supabase
-  const saveGameData = useCallback(
-    async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
-      if (!supabaseRef.current) return false
+  const saveGameData = useCallback(async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
+    if (!supabaseRef.current) return false
 
-      const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
-      const playerId = localStorage.getItem("wlw-player-id")
+    const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
+    const playerId = localStorage.getItem("wlw-player-id")
 
-      if (!nickname || !playerId) {
-        console.error("Missing player information")
+    if (!nickname || !playerId) {
+      console.error("Missing player information")
+      return false
+    }
+
+    try {
+      // Game data to save
+      const gameData = {
+        player_id: playerId,
+        nickname,
+        score: finalScore,
+        word_count: wordCount,
+        time_taken: timeTaken,
+        main_word: mainWordRef.current,
+        level: level,
+      }
+
+      console.log("Saving game data to Supabase:", gameData)
+
+      // Use upsert to ensure data is saved even if there's a conflict
+      const { data, error } = await supabaseRef.current.from("game_scores").upsert(gameData).select()
+
+      if (error) {
+        console.error("Error saving to Supabase:", error)
         return false
       }
 
-      try {
-        // Game data to save
-        const gameData = {
-          player_id: playerId,
-          nickname,
-          score: finalScore,
-          word_count: wordCount,
-          time_taken: timeTaken,
-          main_word: mainWord,
-          level: level,
-        }
+      console.log("Successfully saved to Supabase:", data)
 
-        console.log("Saving game data to Supabase:", gameData)
+      // Trigger a leaderboard refresh
+      await refreshLeaderboard({
+        score: finalScore,
+        nickname,
+        wordCount,
+        level,
+      })
 
-        // Use upsert to ensure data is saved even if there's a conflict
-        const { data, error } = await supabaseRef.current.from("game_scores").upsert(gameData).select()
-
-        if (error) {
-          console.error("Error saving to Supabase:", error)
-          return false
-        }
-
-        console.log("Successfully saved to Supabase:", data)
-
-        // Trigger a leaderboard refresh
-        await refreshLeaderboard({
-          score: finalScore,
-          nickname,
-          wordCount,
-          level,
-        })
-
-        return true
-      } catch (error) {
-        console.error("Error saving score:", error)
-        return false
-      }
-    },
-    [mainWord],
-  )
+      return true
+    } catch (error) {
+      console.error("Error saving score:", error)
+      return false
+    }
+  }, [])
 
   // End game and calculate final score
   const endGame = useCallback(async () => {
@@ -197,6 +199,7 @@ export default function GamePage() {
         const randomIndex = Math.floor(Math.random() * wordList.length)
         const selectedWord = wordList[randomIndex].word.toUpperCase()
         setMainWord(selectedWord)
+        mainWordRef.current = selectedWord
 
         // Shuffle the letters of the main word
         const shuffledLetters = [...selectedWord].sort(() => Math.random() - 0.5)
@@ -220,35 +223,16 @@ export default function GamePage() {
 
     initGame()
 
-    // Add event listeners for better mobile performance
-    if (typeof window !== "undefined") {
-      const handleTouchStart = () => {
-        setTouchStartTime(Date.now())
+    // Cleanup function
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
       }
-
-      const handleTouchEnd = () => {
-        if (touchStartTime && Date.now() - touchStartTime < 300) {
-          // This was a quick tap, no need to do anything special
-        }
-        setTouchStartTime(null)
-      }
-
-      document.addEventListener("touchstart", handleTouchStart)
-      document.addEventListener("touchend", handleTouchEnd)
-
-      // Cleanup function
-      return () => {
-        if (timerRef.current) {
-          clearInterval(timerRef.current)
-        }
-        if (endGameTimeoutRef.current) {
-          clearTimeout(endGameTimeoutRef.current)
-        }
-        document.removeEventListener("touchstart", handleTouchStart)
-        document.removeEventListener("touchend", handleTouchEnd)
+      if (endGameTimeoutRef.current) {
+        clearTimeout(endGameTimeoutRef.current)
       }
     }
-  }, [router, touchStartTime])
+  }, [router])
 
   // Timer logic with optimized interval
   useEffect(() => {
@@ -293,11 +277,11 @@ export default function GamePage() {
       // Track game start after a small delay to ensure analytics is loaded
       if (typeof window !== "undefined") {
         setTimeout(() => {
-          trackGameStart(mainWord)
+          trackGameStart(mainWordRef.current)
         }, 100)
       }
     }
-  }, [gameStarted, gameEnded, mainWord])
+  }, [gameStarted, gameEnded])
 
   // Update score whenever validWords changes
   useEffect(() => {
@@ -307,29 +291,50 @@ export default function GamePage() {
     }
   }, [validWords])
 
-  // Handle letter selection with debounce for better mobile performance
+  // Handle letter selection with improved touch handling for mobile
   const handleLetterClick = useCallback(
     (letter: string, index: number) => {
+      // Prevent interaction if game has ended
+      if (gameEnded) return
+
+      // Start game if not started
       if (!gameStarted) {
         startGame()
       }
 
-      if (gameEnded) return
-
-      // Debounce to prevent double-taps on mobile
+      // Implement touch cooldown to prevent accidental double taps
       const now = Date.now()
-      if (touchStartTime && now - touchStartTime < 50) {
+      if (touchCooldownRef.current) {
         return
       }
 
-      setSelectedLetters((prev) => [...prev, letter])
-      setSelectedIndices((prev) => [...prev, index])
+      // Set cooldown flag
+      touchCooldownRef.current = true
+
+      // Add letter to selection if not already selected
+      if (!selectedIndices.includes(index)) {
+        setSelectedLetters((prev) => [...prev, letter])
+        setSelectedIndices((prev) => [...prev, index])
+      }
+
+      // Reset cooldown after a short delay
+      setTimeout(() => {
+        touchCooldownRef.current = false
+      }, 100)
     },
-    [gameStarted, gameEnded, startGame, touchStartTime],
+    [gameStarted, gameEnded, selectedIndices, startGame],
   )
 
-  // Handle letter removal
+  // Handle letter removal with improved touch handling
   const handleSelectedLetterClick = useCallback((index: number) => {
+    // Prevent interaction during cooldown
+    if (touchCooldownRef.current) {
+      return
+    }
+
+    // Set cooldown flag
+    touchCooldownRef.current = true
+
     setSelectedLetters((prev) => {
       const newSelectedLetters = [...prev]
       newSelectedLetters.splice(index, 1)
@@ -341,16 +346,32 @@ export default function GamePage() {
       newSelectedIndices.splice(index, 1)
       return newSelectedIndices
     })
+
+    // Reset cooldown after a short delay
+    setTimeout(() => {
+      touchCooldownRef.current = false
+    }, 100)
   }, [])
 
   // Handle word submission with optimized validation
   const handleSubmitWord = useCallback(async () => {
-    if (!gameStarted) {
-      startGame()
+    // Prevent multiple submissions at once
+    if (processingSubmissionRef.current) {
       return
     }
 
-    if (gameEnded || selectedLetters.length === 0) return
+    processingSubmissionRef.current = true
+
+    if (!gameStarted) {
+      startGame()
+      processingSubmissionRef.current = false
+      return
+    }
+
+    if (gameEnded || selectedLetters.length === 0) {
+      processingSubmissionRef.current = false
+      return
+    }
 
     const word = selectedLetters.join("")
     console.log("Submitting word:", word)
@@ -366,6 +387,8 @@ export default function GamePage() {
       if (typeof window !== "undefined") {
         trackWordSubmitted(word, false)
       }
+
+      processingSubmissionRef.current = false
       return
     }
 
@@ -380,60 +403,70 @@ export default function GamePage() {
       if (typeof window !== "undefined") {
         trackWordSubmitted(word, false)
       }
+
+      processingSubmissionRef.current = false
       return
     }
 
     // Show loading state for better UX
     setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
 
-    // Check if it's a valid English word using the dictionary API
-    console.log("Checking if word is valid:", word)
-    const isValid = await isValidEnglishWord(word)
-
-    if (isValid) {
-      console.log("Word is valid:", word)
-      const newValidWords = [...validWords, word]
-      setValidWords(newValidWords)
-
-      // Update the last submitted word status
-      setSubmittedWords((prev) => {
-        const updated = [...prev]
-        updated[updated.length - 1] = { word, status: "valid" }
-        return updated
-      })
-
-      // Calculate and update score
-      const newScore = calculateScore(newValidWords)
-      console.log("New score after adding word:", newScore)
-      setScore(newScore)
-
-      // Track valid word submission
-      if (typeof window !== "undefined") {
-        trackWordSubmitted(word, true)
-      }
-    } else {
-      // Word is already marked as invalid in the loading state
-      console.log("Word is invalid:", word)
-
-      // Track invalid word submission
-      if (typeof window !== "undefined") {
-        trackWordSubmitted(word, false)
-      }
-    }
-
+    // Clear selection immediately to prevent accidental resubmission
     setSelectedLetters([])
     setSelectedIndices([])
 
-    // Scroll to bottom of word list with smooth animation
-    if (wordListRef.current) {
-      setTimeout(() => {
-        if (wordListRef.current) {
-          wordListRef.current.scrollTo({
-            top: wordListRef.current.scrollHeight,
-            behavior: "smooth",
-          })
+    try {
+      // Check if it's a valid English word using the dictionary API
+      console.log("Checking if word is valid:", word)
+      const isValid = await isValidEnglishWord(word)
+
+      if (isValid) {
+        console.log("Word is valid:", word)
+        const newValidWords = [...validWords, word]
+        setValidWords(newValidWords)
+
+        // Update the last submitted word status
+        setSubmittedWords((prev) => {
+          const updated = [...prev]
+          updated[updated.length - 1] = { word, status: "valid" }
+          return updated
+        })
+
+        // Calculate and update score
+        const newScore = calculateScore(newValidWords)
+        console.log("New score after adding word:", newScore)
+        setScore(newScore)
+
+        // Track valid word submission
+        if (typeof window !== "undefined") {
+          trackWordSubmitted(word, true)
         }
-      }, 50)
+      } else {
+        // Word is already marked as invalid in the loading state
+        console.log("Word is invalid:", word)
+
+        // Track invalid word submission
+        if (typeof window !== "undefined") {
+          trackWordSubmitted(word, false)
+        }
+      }
+    } catch (error) {
+      console.error("Error validating word:", error)
+    } finally {
+      // Scroll to bottom of word list with smooth animation
+      if (wordListRef.current) {
+        setTimeout(() => {
+          if (wordListRef.current) {
+            wordListRef.current.scrollTo({
+              top: wordListRef.current.scrollHeight,
+              behavior: "smooth",
+            })
+          }
+        }, 50)
+      }
+
+      // Reset processing flag
+      processingSubmissionRef.current = false
     }
   }, [gameStarted, gameEnded, selectedLetters, validWords, startGame])
 
@@ -587,7 +620,6 @@ export default function GamePage() {
                   key={`selected-${index}`}
                   className="w-8 h-8 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-md flex items-center justify-center text-base font-bold cursor-pointer shadow-md touch-manipulation"
                   onClick={() => handleSelectedLetterClick(index)}
-                  whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -617,7 +649,7 @@ export default function GamePage() {
                 onClick={handleSubmitWord}
                 size="sm"
                 className="h-8 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-md text-xs touch-manipulation"
-                disabled={selectedLetters.length < 3}
+                disabled={selectedLetters.length < 3 || processingSubmissionRef.current}
                 style={{
                   WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
                 }}
