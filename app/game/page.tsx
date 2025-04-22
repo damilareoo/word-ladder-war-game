@@ -11,6 +11,8 @@ import { motion, AnimatePresence } from "framer-motion"
 import { getSupabaseBrowserClient } from "@/lib/supabase"
 import { Footer } from "@/components/footer"
 import { LetterTile } from "@/components/letter-tile"
+import { refreshLeaderboard } from "@/lib/realtime-utils"
+import { trackGameStart, trackGameComplete, trackWordSubmitted } from "@/lib/analytics"
 
 // Game duration in seconds
 const GAME_DURATION = 120
@@ -46,7 +48,7 @@ export default function GamePage() {
   const gameDataSavedRef = useRef<boolean>(false)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const endGameTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const supabaseRef = useRef(getSupabaseBrowserClient())
+  const supabase = useRef(getSupabaseBrowserClient()).current
 
   // Keep validWordsRef in sync with validWords state
   useEffect(() => {
@@ -71,6 +73,9 @@ export default function GamePage() {
       // Shuffle the letters of the main word
       const shuffledLetters = [...selectedWord].sort(() => Math.random() - 0.5)
       setLetters(shuffledLetters)
+
+      // Store the main word in localStorage for reference
+      localStorage.setItem("wlw-main-word", selectedWord)
 
       try {
         // Get definition for the main word
@@ -136,8 +141,11 @@ export default function GamePage() {
     if (!gameStarted && !gameEnded) {
       console.log("Game started")
       setGameStarted(true)
+
+      // Track game start
+      trackGameStart(mainWord)
     }
-  }, [gameStarted, gameEnded])
+  }, [gameStarted, gameEnded, mainWord])
 
   // Update score whenever validWords changes
   useEffect(() => {
@@ -159,8 +167,6 @@ export default function GamePage() {
       }
 
       try {
-        const supabase = supabaseRef.current
-
         // Game data to save
         const gameData = {
           player_id: playerId,
@@ -184,23 +190,13 @@ export default function GamePage() {
 
         console.log("Successfully saved to Supabase:", data)
 
-        // Trigger a leaderboard refresh by sending a broadcast
-        try {
-          await supabase.channel("leaderboard_refresh").send({
-            type: "broadcast",
-            event: "refresh",
-            payload: {
-              timestamp: new Date().toISOString(),
-              score: finalScore,
-              nickname,
-              wordCount,
-              level,
-            },
-          })
-          console.log("Sent leaderboard refresh signal")
-        } catch (broadcastError) {
-          console.error("Error sending refresh broadcast:", broadcastError)
-        }
+        // Trigger a leaderboard refresh
+        await refreshLeaderboard({
+          score: finalScore,
+          nickname,
+          wordCount,
+          level,
+        })
 
         return true
       } catch (error) {
@@ -208,7 +204,7 @@ export default function GamePage() {
         return false
       }
     },
-    [mainWord],
+    [mainWord, supabase],
   )
 
   // End game and calculate final score
@@ -237,6 +233,9 @@ export default function GamePage() {
     const wordCount = currentValidWords.length
     const level = calculateLevel(wordCount)
 
+    // Track game completion
+    trackGameComplete(finalScore, wordCount, level)
+
     console.log("Game summary:", {
       score: finalScore,
       wordCount,
@@ -249,7 +248,6 @@ export default function GamePage() {
     localStorage.setItem("wlw-last-word-count", wordCount.toString())
     localStorage.setItem("wlw-last-level", level.toString())
     localStorage.setItem("wlw-last-time", timeTaken.toString())
-    localStorage.setItem("wlw-refresh-leaderboard", "true")
     localStorage.setItem("wlw-game-timestamp", Date.now().toString())
 
     // Save game data to Supabase in the background
@@ -314,6 +312,9 @@ export default function GamePage() {
       setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
       setSelectedLetters([])
       setSelectedIndices([])
+
+      // Track invalid word submission
+      trackWordSubmitted(word, false)
       return
     }
 
@@ -323,6 +324,9 @@ export default function GamePage() {
       setSubmittedWords((prev) => [...prev, { word, status: "duplicate" }])
       setSelectedLetters([])
       setSelectedIndices([])
+
+      // Track duplicate word submission
+      trackWordSubmitted(word, false)
       return
     }
 
@@ -340,9 +344,15 @@ export default function GamePage() {
       const newScore = calculateScore(newValidWords)
       console.log("New score after adding word:", newScore)
       setScore(newScore)
+
+      // Track valid word submission
+      trackWordSubmitted(word, true)
     } else {
       console.log("Word is invalid:", word)
       setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
+
+      // Track invalid word submission
+      trackWordSubmitted(word, false)
     }
 
     setSelectedLetters([])

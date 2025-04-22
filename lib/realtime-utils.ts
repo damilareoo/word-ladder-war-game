@@ -1,61 +1,77 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase"
 
-// Singleton for the broadcast channel
-let broadcastChannel: ReturnType<typeof getSupabaseBrowserClient>["channel"] | null = null
+// Singleton pattern for channel to avoid multiple subscriptions
+let leaderboardChannel: ReturnType<typeof getSupabaseBrowserClient>["channel"] | null = null
+let isSubscribed = false
 
-// Function to get or create the broadcast channel
-export function getLeaderboardBroadcastChannel() {
-  if (!broadcastChannel) {
+/**
+ * Get a singleton channel for leaderboard updates
+ */
+export function getLeaderboardChannel() {
+  if (!leaderboardChannel) {
     const supabase = getSupabaseBrowserClient()
-    broadcastChannel = supabase.channel("leaderboard_refresh")
+    leaderboardChannel = supabase.channel("leaderboard_updates")
   }
-  return broadcastChannel
+  return leaderboardChannel
 }
 
-// Function to send a refresh signal
-export async function sendLeaderboardRefreshSignal(data: {
+/**
+ * Ensure the channel is subscribed (only once)
+ */
+export async function ensureChannelSubscribed() {
+  if (!isSubscribed) {
+    const channel = getLeaderboardChannel()
+    if (channel.state !== "joined") {
+      await channel.subscribe()
+      isSubscribed = true
+    } else {
+      isSubscribed = true
+    }
+  }
+  return true
+}
+
+/**
+ * Send a refresh signal to the leaderboard
+ */
+export async function refreshLeaderboard(data: {
   score: number
   nickname: string
   wordCount: number
   level: number
 }) {
   try {
-    const channel = getLeaderboardBroadcastChannel()
+    // First ensure the channel is subscribed
+    await ensureChannelSubscribed()
 
+    // Then send the message
+    const channel = getLeaderboardChannel()
     await channel.send({
       type: "broadcast",
       event: "refresh",
       payload: {
         timestamp: Date.now(),
-        ...data,
       },
     })
 
-    console.log("Sent leaderboard refresh signal:", data)
+    // Set the refresh flag in localStorage as a fallback
+    localStorage.setItem("wlw-refresh-leaderboard", "true")
+
     return true
   } catch (error) {
-    console.error("Error sending leaderboard refresh signal:", error)
+    console.error("Error sending leaderboard refresh:", error)
     return false
   }
 }
 
-// Function to subscribe to refresh signals
-export function subscribeToLeaderboardRefreshes(callback: (payload: any) => void) {
-  const channel = getLeaderboardBroadcastChannel()
-
-  channel.on("broadcast", { event: "refresh" }, (payload) => {
-    console.log("Received leaderboard refresh signal:", payload)
-    callback(payload)
-  })
-
-  return channel.subscribe()
-}
-
-// Function to unsubscribe from the channel
-export function unsubscribeFromLeaderboard() {
-  if (broadcastChannel) {
+/**
+ * Clean up channel when no longer needed
+ */
+export function cleanupLeaderboardChannel() {
+  if (leaderboardChannel) {
     const supabase = getSupabaseBrowserClient()
-    supabase.removeChannel(broadcastChannel)
-    broadcastChannel = null
+    supabase.removeChannel(leaderboardChannel)
+    leaderboardChannel = null
+    isSubscribed = false
   }
 }

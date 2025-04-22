@@ -1,7 +1,9 @@
 import type React from "react"
 import type { Metadata } from "next"
 import { Inter } from "next/font/google"
+import { Analytics } from "@vercel/analytics/react"
 import "./globals.css"
+import { Suspense } from "react"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -60,7 +62,10 @@ export default function RootLayout({
         <meta name="twitter:image" content={`${PRODUCTION_URL}/site-image.png`} />
         <meta name="twitter:creator" content="@damilare_oo" />
       </head>
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        <Suspense>{children}</Suspense>
+        <Analytics />
+      </body>
     </html>
   )
 }

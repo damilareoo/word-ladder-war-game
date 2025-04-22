@@ -1,12 +1,12 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useState, useEffect, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Trophy, ArrowLeft, Medal, User, Star, RefreshCw } from "lucide-react"
-import { motion } from "framer-motion"
 import { getSupabaseBrowserClient } from "@/lib/supabase"
 import { Footer } from "@/components/footer"
+import { getLeaderboardChannel, ensureChannelSubscribed, cleanupLeaderboardChannel } from "@/lib/realtime-utils"
 
 type GameScore = {
   id: string
@@ -21,146 +21,75 @@ type GameScore = {
 
 export default function LeaderboardPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const [scores, setScores] = useState<GameScore[]>([])
-  const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<"score" | "words">("score")
+  const [scoreData, setScoreData] = useState<GameScore[]>([])
+  const [wordData, setWordData] = useState<GameScore[]>([])
+  const [activeFilter, setActiveFilter] = useState<"score" | "words">("score")
+  const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [refreshKey, setRefreshKey] = useState(0) // Used to force refresh
-  const [lastRefreshTime, setLastRefreshTime] = useState(Date.now())
 
-  const supabaseRef = useRef(getSupabaseBrowserClient())
-  const refreshAttemptsRef = useRef(0)
-  const maxRefreshAttempts = 3
+  // Fetch leaderboard data
+  const fetchLeaderboard = useCallback(async () => {
+    setIsLoading(true)
+    setError(null)
 
-  // Check if we need to refresh the leaderboard
-  const shouldRefresh =
-    searchParams.get("refresh") === "true" ||
-    localStorage.getItem("wlw-refresh-leaderboard") === "true" ||
-    Date.now() - lastRefreshTime > 10000 // Force refresh every 10 seconds
+    try {
+      const supabase = getSupabaseBrowserClient()
 
-  // Function to fetch leaderboard data
-  const fetchLeaderboard = useCallback(
-    async (forceRefresh = false) => {
-      try {
-        if (loading && !forceRefresh) return
+      // Fetch score data
+      const { data: scoreResults, error: scoreError } = await supabase
+        .from("game_scores")
+        .select("*")
+        .order("score", { ascending: false })
+        .limit(50)
 
-        setLoading(true)
-        setError(null)
+      if (scoreError) throw scoreError
 
-        const supabase = supabaseRef.current
+      // Fetch word count data
+      const { data: wordResults, error: wordError } = await supabase
+        .from("game_scores")
+        .select("*")
+        .order("word_count", { ascending: false })
+        .limit(50)
 
-        // Determine sort order based on filter
-        const orderColumn = filter === "score" ? "score" : "word_count"
-        const ascending = false // Always descending for both score and words
+      if (wordError) throw wordError
 
-        console.log(`Fetching leaderboard sorted by ${orderColumn} in descending order`)
+      // Update state with both datasets
+      setScoreData(scoreResults || [])
+      setWordData(wordResults || [])
 
-        // Make sure we're getting scores > 0 for score and word_count filters
-        let query = supabase.from("game_scores").select("*")
+      // Clear localStorage flag
+      localStorage.removeItem("wlw-refresh-leaderboard")
+    } catch (error) {
+      console.error("Error fetching leaderboard:", error)
+      setError("Failed to load leaderboard. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
 
-        if (filter === "score") {
-          query = query.gt("score", 0)
-        } else if (filter === "words") {
-          query = query.gt("word_count", 0)
-        }
-
-        // Add a cache-busting parameter to avoid stale data
-        const { data, error } = await query.order(orderColumn, { ascending }).limit(50).throwOnError()
-
-        if (error) {
-          console.error("Supabase query error:", error)
-          setError("Failed to load leaderboard. Please try again.")
-          throw error
-        }
-
-        console.log("Leaderboard data count:", data?.length || 0)
-
-        if (!data || data.length === 0) {
-          console.log("No leaderboard data found")
-        }
-
-        setScores(data || [])
-        setLastRefreshTime(Date.now())
-
-        // Clear the refresh flag
-        localStorage.removeItem("wlw-refresh-leaderboard")
-      } catch (error) {
-        console.error("Error fetching leaderboard:", error)
-        setError("Failed to load leaderboard. Please try again.")
-
-        // Retry if we haven't reached the maximum attempts
-        refreshAttemptsRef.current += 1
-        if (refreshAttemptsRef.current < maxRefreshAttempts) {
-          setTimeout(() => fetchLeaderboard(true), 1000)
-        }
-      } finally {
-        setLoading(false)
-      }
-    },
-    [filter, loading],
-  )
-
-  // Set up real-time subscription for leaderboard updates
+  // Initial data fetch and subscription setup
   useEffect(() => {
-    const supabase = supabaseRef.current
+    // Fetch data immediately
+    fetchLeaderboard()
 
-    // Listen for changes to the game_scores table
-    const scoresChannel = supabase
-      .channel("game_scores_changes")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "game_scores",
-        },
-        (payload) => {
-          // Refresh the leaderboard when data changes
-          console.log("Game scores changed, refreshing leaderboard:", payload)
-          fetchLeaderboard(true)
-        },
-      )
-      .subscribe()
+    // Set up real-time subscription
+    const setupSubscription = async () => {
+      await ensureChannelSubscribed()
 
-    // Listen for the custom refresh event from the results page
-    const refreshChannel = supabase
-      .channel("leaderboard_refresh")
-      .on("broadcast", { event: "refresh" }, (payload) => {
-        console.log("Received refresh signal, updating leaderboard:", payload)
-        fetchLeaderboard(true)
+      const channel = getLeaderboardChannel()
+      channel.on("broadcast", { event: "refresh" }, () => {
+        console.log("Received leaderboard refresh signal")
+        fetchLeaderboard()
       })
-      .subscribe()
+    }
 
-    // Clean up subscriptions when component unmounts
+    setupSubscription()
+
+    // Cleanup subscription
     return () => {
-      supabase.removeChannel(scoresChannel)
-      supabase.removeChannel(refreshChannel)
+      cleanupLeaderboardChannel()
     }
   }, [fetchLeaderboard])
-
-  // Fetch leaderboard data when component mounts or filter changes
-  useEffect(() => {
-    // If we should refresh, do it immediately
-    if (shouldRefresh) {
-      console.log("Should refresh flag detected, refreshing leaderboard")
-      fetchLeaderboard(true)
-    } else {
-      fetchLeaderboard(false)
-    }
-
-    // Set up a periodic refresh
-    const refreshInterval = setInterval(() => {
-      if (Date.now() - lastRefreshTime > 10000) {
-        // Refresh every 10 seconds
-        fetchLeaderboard(true)
-      }
-    }, 10000)
-
-    return () => {
-      clearInterval(refreshInterval)
-    }
-  }, [filter, refreshKey, shouldRefresh, fetchLeaderboard, lastRefreshTime])
 
   // Get level title
   const getLevelTitle = (level: number) => {
@@ -169,20 +98,13 @@ export default function LeaderboardPage() {
     return "Word Guru"
   }
 
-  // Manual refresh function
-  const handleRefresh = () => {
-    refreshAttemptsRef.current = 0
-    setRefreshKey((prev) => prev + 1)
-    fetchLeaderboard(true)
-  }
+  // Get current data based on active filter
+  const currentData = activeFilter === "score" ? scoreData : wordData
 
   return (
     <main className="flex min-h-screen flex-col bg-zinc-900 text-cream">
-      <motion.header
-        className="sticky top-0 z-10 flex items-center justify-between bg-zinc-900/95 p-3 backdrop-blur-sm"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
+      {/* Header */}
+      <div className="sticky top-0 z-10 flex items-center justify-between bg-zinc-900/95 p-3 backdrop-blur-sm">
         <Button
           variant="ghost"
           size="icon"
@@ -195,62 +117,58 @@ export default function LeaderboardPage() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={handleRefresh}
+          onClick={fetchLeaderboard}
           className="text-zinc-400 hover:text-cream h-8 w-8"
-          disabled={loading}
+          disabled={isLoading}
         >
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
         </Button>
-      </motion.header>
+      </div>
 
+      {/* Filter Buttons */}
       <div className="mx-auto w-full max-w-md p-2 flex-1">
-        <motion.div
-          className="mb-3 flex justify-center gap-2"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2 }}
-        >
+        <div className="mb-3 flex justify-center gap-2">
           <Button
-            variant={filter === "score" ? "default" : "outline"}
+            variant={activeFilter === "score" ? "default" : "outline"}
             size="sm"
-            onClick={() => setFilter("score")}
-            className={`text-xs h-8 ${filter === "score" ? "bg-orange-500 hover:bg-orange-600" : "border-zinc-700"}`}
+            onClick={() => setActiveFilter("score")}
+            className={`text-xs h-8 ${
+              activeFilter === "score" ? "bg-orange-500 hover:bg-orange-600" : "border-zinc-700"
+            }`}
           >
             <Trophy className="mr-1 h-3 w-3" />
             Score
           </Button>
           <Button
-            variant={filter === "words" ? "default" : "outline"}
+            variant={activeFilter === "words" ? "default" : "outline"}
             size="sm"
-            onClick={() => setFilter("words")}
-            className={`text-xs h-8 ${filter === "words" ? "bg-green-500 hover:bg-green-600" : "border-zinc-700"}`}
+            onClick={() => setActiveFilter("words")}
+            className={`text-xs h-8 ${
+              activeFilter === "words" ? "bg-green-500 hover:bg-green-600" : "border-zinc-700"
+            }`}
           >
             <Star className="mr-1 h-3 w-3" />
             Words
           </Button>
-        </motion.div>
+        </div>
 
-        {loading ? (
+        {/* Content */}
+        {isLoading && !currentData.length ? (
           <div className="flex items-center justify-center py-8">
             <div className="h-6 w-6 animate-spin rounded-full border-4 border-t-orange-500"></div>
           </div>
         ) : error ? (
-          <motion.div
-            className="rounded-lg bg-zinc-800 p-6 text-center"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
+          <div className="rounded-lg bg-zinc-800 p-6 text-center">
             <p className="text-red-400 text-sm">{error}</p>
-            <Button onClick={handleRefresh} className="mt-3 bg-orange-500 hover:bg-orange-600 rounded-xl text-xs h-8">
+            <Button
+              onClick={fetchLeaderboard}
+              className="mt-3 bg-orange-500 hover:bg-orange-600 rounded-xl text-xs h-8"
+            >
               Retry
             </Button>
-          </motion.div>
-        ) : scores.length === 0 ? (
-          <motion.div
-            className="rounded-lg bg-zinc-800 p-6 text-center"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
+          </div>
+        ) : currentData.length === 0 ? (
+          <div className="rounded-lg bg-zinc-800 p-6 text-center">
             <Trophy className="mx-auto mb-3 h-8 w-8 text-zinc-600" />
             <h2 className="text-lg font-bold">No scores yet</h2>
             <p className="mt-1 text-zinc-400 text-sm">Play a game to see your score on the leaderboard!</p>
@@ -260,15 +178,12 @@ export default function LeaderboardPage() {
             >
               Play Now
             </Button>
-          </motion.div>
+          </div>
         ) : (
           <div className="space-y-2">
-            {scores.map((score, index) => (
-              <motion.div
-                key={score.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: Math.min(index * 0.02, 0.5) }} // Cap the delay to avoid too much staggering
+            {currentData.map((item, index) => (
+              <div
+                key={`${activeFilter}-${item.id}`}
                 className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-zinc-800 to-zinc-900 p-2 shadow-md"
               >
                 <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 text-xs font-bold">
@@ -286,18 +201,18 @@ export default function LeaderboardPage() {
                 <div className="flex-1">
                   <div className="flex items-center gap-1">
                     <User className="h-3 w-3 text-zinc-500" />
-                    <p className="font-medium text-sm">{score.nickname}</p>
+                    <p className="font-medium text-sm">{item.nickname}</p>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-zinc-400">
-                    <p>{score.word_count} words</p>
+                    <p>{item.word_count} words</p>
                   </div>
                 </div>
 
                 <div className="text-right">
-                  <p className="text-base font-bold text-orange-500">{score.score}</p>
-                  <p className="text-xs text-zinc-500">{getLevelTitle(score.level)}</p>
+                  <p className="text-base font-bold text-orange-500">{item.score}</p>
+                  <p className="text-xs text-zinc-500">{getLevelTitle(item.level)}</p>
                 </div>
-              </motion.div>
+              </div>
             ))}
           </div>
         )}
