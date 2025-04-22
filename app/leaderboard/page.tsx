@@ -35,7 +35,7 @@ export default function LeaderboardPage() {
     try {
       const supabase = getSupabaseBrowserClient()
 
-      // Fetch score data
+      // Fetch score data - ensure no filtering by level
       const { data: scoreResults, error: scoreError } = await supabase
         .from("game_scores")
         .select("*")
@@ -44,7 +44,7 @@ export default function LeaderboardPage() {
 
       if (scoreError) throw scoreError
 
-      // Fetch word count data
+      // Fetch word count data - ensure no filtering by level
       const { data: wordResults, error: wordError } = await supabase
         .from("game_scores")
         .select("*")
@@ -52,6 +52,10 @@ export default function LeaderboardPage() {
         .limit(50)
 
       if (wordError) throw wordError
+
+      // Log the data for debugging
+      console.log("Fetched score data:", scoreResults)
+      console.log("Fetched word data:", wordResults)
 
       // Update state with both datasets
       setScoreData(scoreResults || [])
@@ -93,13 +97,33 @@ export default function LeaderboardPage() {
 
   // Get level title
   const getLevelTitle = (level: number) => {
-    if (level === 1) return "Word Novice"
-    if (level === 2) return "Word Expert"
+    // Ensure level is treated as a number
+    const numLevel = typeof level === "number" ? level : Number.parseInt(String(level), 10)
+
+    if (numLevel === 1) return "Word Novice"
+    if (numLevel === 2) return "Word Expert"
     return "Word Guru"
   }
 
   // Get current data based on active filter
   const currentData = activeFilter === "score" ? scoreData : wordData
+
+  useEffect(() => {
+    // Debug logging for the leaderboard data
+    if (currentData.length > 0) {
+      const levelsDistribution = currentData.reduce(
+        (acc, item) => {
+          const level = item.level
+          acc[level] = (acc[level] || 0) + 1
+          return acc
+        },
+        {} as Record<number, number>,
+      )
+
+      console.log("Leaderboard data distribution by level:", levelsDistribution)
+      console.log("First few items:", currentData.slice(0, 5))
+    }
+  }, [currentData])
 
   return (
     <main className="flex min-h-screen flex-col bg-zinc-900 text-cream">
@@ -210,7 +234,9 @@ export default function LeaderboardPage() {
 
                 <div className="text-right">
                   <p className="text-base font-bold text-orange-500">{item.score}</p>
-                  <p className="text-xs text-zinc-500">{getLevelTitle(item.level)}</p>
+                  <p className="text-xs text-zinc-500">
+                    {getLevelTitle(item.level)} (Lvl {item.level})
+                  </p>
                 </div>
               </div>
             ))}

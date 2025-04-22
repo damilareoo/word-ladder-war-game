@@ -10,7 +10,7 @@ import { calculateScore, calculateLevel } from "@/lib/game-utils"
 import { motion, AnimatePresence } from "framer-motion"
 import { getSupabaseBrowserClient } from "@/lib/supabase"
 import { Footer } from "@/components/footer"
-import { LetterTile } from "@/components/letter-tile"
+import { LetterTile, SelectedLetter } from "@/components/letter-tile"
 import { refreshLeaderboard } from "@/lib/realtime-utils"
 import { trackGameStart, trackGameComplete, trackWordSubmitted } from "@/lib/analytics"
 
@@ -23,6 +23,7 @@ const GAME_DURATION = 120
 
 // Memoized components for better performance
 const MemoizedLetterTile = memo(LetterTile)
+const MemoizedSelectedLetter = memo(SelectedLetter)
 
 // Memoized motion components
 const MotionHeader = memo(({ children, ...props }: any) => <motion.header {...props}>{children}</motion.header>)
@@ -42,9 +43,8 @@ export default function GamePage() {
   )
 
   // New state for letter tile gameplay
-  const [letters, setLetters] = useState<string[]>([])
-  const [selectedLetters, setSelectedLetters] = useState<string[]>([])
-  const [selectedIndices, setSelectedIndices] = useState<number[]>([])
+  const [letters, setLetters] = useState<Array<{ letter: string; visible: boolean }>>([])
+  const [selectedLetters, setSelectedLetters] = useState<Array<{ letter: string; index: number }>>([])
 
   // Refs for touch handling
   const lastTouchTimeRef = useRef<number>(0)
@@ -137,6 +137,9 @@ export default function GamePage() {
     const wordCount = currentValidWords.length
     const level = calculateLevel(wordCount)
 
+    // Log level information for debugging
+    console.log(`Game ended with ${wordCount} words, calculated level: ${level}`)
+
     // Track game completion
     if (typeof window !== "undefined") {
       trackGameComplete(finalScore, wordCount, level)
@@ -201,8 +204,14 @@ export default function GamePage() {
         setMainWord(selectedWord)
         mainWordRef.current = selectedWord
 
-        // Shuffle the letters of the main word
-        const shuffledLetters = [...selectedWord].sort(() => Math.random() - 0.5)
+        // Shuffle the letters of the main word and set them as visible
+        const shuffledLetters = [...selectedWord]
+          .map((letter) => ({
+            letter,
+            visible: true,
+          }))
+          .sort(() => Math.random() - 0.5)
+
         setLetters(shuffledLetters)
 
         // Store the main word in localStorage for reference
@@ -303,7 +312,6 @@ export default function GamePage() {
       }
 
       // Implement touch cooldown to prevent accidental double taps
-      const now = Date.now()
       if (touchCooldownRef.current) {
         return
       }
@@ -311,47 +319,55 @@ export default function GamePage() {
       // Set cooldown flag
       touchCooldownRef.current = true
 
-      // Add letter to selection if not already selected
-      if (!selectedIndices.includes(index)) {
-        setSelectedLetters((prev) => [...prev, letter])
-        setSelectedIndices((prev) => [...prev, index])
-      }
+      // Add letter to selection and hide it from the available letters
+      setSelectedLetters((prev) => [...prev, { letter, index }])
+
+      // Update the letters array to mark this letter as not visible
+      setLetters((prev) => {
+        const newLetters = [...prev]
+        newLetters[index].visible = false
+        return newLetters
+      })
 
       // Reset cooldown after a short delay
       setTimeout(() => {
         touchCooldownRef.current = false
       }, 100)
     },
-    [gameStarted, gameEnded, selectedIndices, startGame],
+    [gameStarted, gameEnded, startGame],
   )
 
   // Handle letter removal with improved touch handling
-  const handleSelectedLetterClick = useCallback((index: number) => {
-    // Prevent interaction during cooldown
-    if (touchCooldownRef.current) {
-      return
-    }
+  const handleSelectedLetterClick = useCallback(
+    (selectedIndex: number) => {
+      // Prevent interaction during cooldown
+      if (touchCooldownRef.current) {
+        return
+      }
 
-    // Set cooldown flag
-    touchCooldownRef.current = true
+      // Set cooldown flag
+      touchCooldownRef.current = true
 
-    setSelectedLetters((prev) => {
-      const newSelectedLetters = [...prev]
-      newSelectedLetters.splice(index, 1)
-      return newSelectedLetters
-    })
+      // Get the letter that was clicked
+      const removedLetter = selectedLetters[selectedIndex]
 
-    setSelectedIndices((prev) => {
-      const newSelectedIndices = [...prev]
-      newSelectedIndices.splice(index, 1)
-      return newSelectedIndices
-    })
+      // Remove the letter from selected letters
+      setSelectedLetters((prev) => prev.filter((_, i) => i !== selectedIndex))
 
-    // Reset cooldown after a short delay
-    setTimeout(() => {
-      touchCooldownRef.current = false
-    }, 100)
-  }, [])
+      // Make the letter visible again in the original letters array
+      setLetters((prev) => {
+        const newLetters = [...prev]
+        newLetters[removedLetter.index].visible = true
+        return newLetters
+      })
+
+      // Reset cooldown after a short delay
+      setTimeout(() => {
+        touchCooldownRef.current = false
+      }, 100)
+    },
+    [selectedLetters],
+  )
 
   // Handle word submission with optimized validation
   const handleSubmitWord = useCallback(async () => {
@@ -373,15 +389,16 @@ export default function GamePage() {
       return
     }
 
-    const word = selectedLetters.join("")
+    const word = selectedLetters.map((item) => item.letter).join("")
     console.log("Submitting word:", word)
 
     // Check if word is at least 3 letters
     if (word.length < 3) {
       console.log("Word too short:", word)
       setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
-      setSelectedLetters([])
-      setSelectedIndices([])
+
+      // Return letters to the pool
+      clearSelection()
 
       // Track invalid word submission
       if (typeof window !== "undefined") {
@@ -396,8 +413,9 @@ export default function GamePage() {
     if (validWords.includes(word)) {
       console.log("Word already submitted:", word)
       setSubmittedWords((prev) => [...prev, { word, status: "duplicate" }])
-      setSelectedLetters([])
-      setSelectedIndices([])
+
+      // Return letters to the pool
+      clearSelection()
 
       // Track duplicate word submission
       if (typeof window !== "undefined") {
@@ -410,10 +428,6 @@ export default function GamePage() {
 
     // Show loading state for better UX
     setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
-
-    // Clear selection immediately to prevent accidental resubmission
-    setSelectedLetters([])
-    setSelectedIndices([])
 
     try {
       // Check if it's a valid English word using the dictionary API
@@ -453,6 +467,9 @@ export default function GamePage() {
     } catch (error) {
       console.error("Error validating word:", error)
     } finally {
+      // Clear the selected letters and return them to the pool
+      clearSelection()
+
       // Scroll to bottom of word list with smooth animation
       if (wordListRef.current) {
         setTimeout(() => {
@@ -470,11 +487,20 @@ export default function GamePage() {
     }
   }, [gameStarted, gameEnded, selectedLetters, validWords, startGame])
 
-  // Clear current selection
+  // Clear current selection and return all selected letters to the pool
   const clearSelection = useCallback(() => {
+    // Make all selected letters visible again
+    setLetters((prev) => {
+      const newLetters = [...prev]
+      selectedLetters.forEach(({ index }) => {
+        newLetters[index].visible = true
+      })
+      return newLetters
+    })
+
+    // Clear selected letters
     setSelectedLetters([])
-    setSelectedIndices([])
-  }, [])
+  }, [selectedLetters])
 
   // Format time as MM:SS
   const formatTime = useCallback((seconds: number) => {
@@ -485,16 +511,32 @@ export default function GamePage() {
 
   // Memoize the letter tiles to prevent unnecessary re-renders
   const letterTiles = useMemo(() => {
-    return letters.map((letter, index) => (
-      <MemoizedLetterTile
-        key={`letter-${index}`}
-        letter={letter}
-        onClick={() => handleLetterClick(letter, index)}
-        isSelected={selectedIndices.includes(index)}
-        position={index}
+    return letters
+      .map(
+        (item, index) =>
+          item.visible && (
+            <MemoizedLetterTile
+              key={`letter-${index}`}
+              letter={item.letter}
+              onClick={() => handleLetterClick(item.letter, index)}
+              position={index}
+            />
+          ),
+      )
+      .filter(Boolean) // Filter out null/undefined values (hidden letters)
+  }, [letters, handleLetterClick])
+
+  // Memoize the selected letter tiles
+  const selectedLetterTiles = useMemo(() => {
+    return selectedLetters.map((item, index) => (
+      <MemoizedSelectedLetter
+        key={`selected-${index}`}
+        letter={item.letter}
+        onClick={() => handleSelectedLetterClick(index)}
+        index={index}
       />
     ))
-  }, [letters, selectedIndices, handleLetterClick])
+  }, [selectedLetters, handleSelectedLetterClick])
 
   if (isLoading) {
     return (
@@ -611,60 +653,58 @@ export default function GamePage() {
       </div>
 
       {/* Selected Letters and Submit Button - Optimized for mobile */}
-      <div className="p-2">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between">
-            <div className="flex flex-wrap gap-1 min-h-8">
-              {selectedLetters.map((letter, index) => (
-                <motion.div
-                  key={`selected-${index}`}
-                  className="w-8 h-8 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-md flex items-center justify-center text-base font-bold cursor-pointer shadow-md touch-manipulation"
-                  onClick={() => handleSelectedLetterClick(index)}
-                  whileTap={{ scale: 0.97 }}
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  style={{
-                    WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
-                  }}
+      <div className="p-3">
+        <div className="flex flex-col gap-3">
+          {/* Selected Letters Area */}
+          <div className="min-h-14 p-2 bg-zinc-800/50 rounded-xl flex flex-wrap gap-2 items-center">
+            <AnimatePresence>
+              {selectedLetters.length > 0 ? (
+                selectedLetterTiles
+              ) : (
+                <motion.p
+                  className="text-zinc-500 text-sm w-full text-center"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
                 >
-                  {letter}
-                </motion.div>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={clearSelection}
-                className="h-8 text-zinc-400 border-zinc-700 text-xs touch-manipulation"
-                disabled={selectedLetters.length === 0}
-                style={{
-                  WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
-                }}
-              >
-                <X className="h-3 w-3 mr-1" />
-                Clear
-              </Button>
-              <Button
-                onClick={handleSubmitWord}
-                size="sm"
-                className="h-8 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-md text-xs touch-manipulation"
-                disabled={selectedLetters.length < 3 || processingSubmissionRef.current}
-                style={{
-                  WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
-                }}
-              >
-                <Send className="h-3 w-3 mr-1" />
-                Enter
-              </Button>
-            </div>
+                  Select letters to form a word
+                </motion.p>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex justify-between gap-2">
+            <Button
+              variant="outline"
+              onClick={clearSelection}
+              className="flex-1 h-10 text-zinc-400 border-zinc-700 text-sm touch-manipulation"
+              disabled={selectedLetters.length === 0}
+              style={{
+                WebkitTapHighlightColor: "transparent",
+              }}
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear
+            </Button>
+            <Button
+              onClick={handleSubmitWord}
+              className="flex-1 h-10 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-md text-sm touch-manipulation"
+              disabled={selectedLetters.length < 3 || processingSubmissionRef.current}
+              style={{
+                WebkitTapHighlightColor: "transparent",
+              }}
+            >
+              <Send className="h-4 w-4 mr-1" />
+              Submit
+            </Button>
           </div>
         </div>
       </div>
 
       {/* Letter Tiles - Improved spacing and touch response for mobile */}
-      <div className="p-2 pt-1 pb-6 mb-6">
-        <div className="flex flex-wrap justify-center gap-2 touch-manipulation">{letterTiles}</div>
+      <div className="p-3 pt-1 pb-6 mb-6">
+        <div className="flex flex-wrap justify-center gap-3 touch-manipulation">{letterTiles}</div>
       </div>
 
       {/* Footer with proper spacing */}
