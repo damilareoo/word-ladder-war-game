@@ -8,6 +8,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase"
 import { Footer } from "@/components/footer"
 import { getLeaderboardChannel, ensureChannelSubscribed, cleanupLeaderboardChannel } from "@/lib/realtime-utils"
 import { motion, AnimatePresence } from "framer-motion"
+import { calculateLevel, getLevelInfo } from "@/lib/game-utils"
 
 type GameScore = {
   id: string
@@ -55,13 +56,26 @@ export default function LeaderboardPage() {
 
       if (wordError) throw wordError
 
+      // Update level information based on new thresholds
+      const updatedScoreResults =
+        scoreResults?.map((item) => ({
+          ...item,
+          level: calculateLevel(item.word_count),
+        })) || []
+
+      const updatedWordResults =
+        wordResults?.map((item) => ({
+          ...item,
+          level: calculateLevel(item.word_count),
+        })) || []
+
       // Log the data for debugging
-      console.log("Fetched score data:", scoreResults)
-      console.log("Fetched word data:", wordResults)
+      console.log("Fetched score data:", updatedScoreResults)
+      console.log("Fetched word data:", updatedWordResults)
 
       // Update state with both datasets
-      setScoreData(scoreResults || [])
-      setWordData(wordResults || [])
+      setScoreData(updatedScoreResults)
+      setWordData(updatedWordResults)
 
       // Clear localStorage flag
       localStorage.removeItem("wlw-refresh-leaderboard")
@@ -92,13 +106,13 @@ export default function LeaderboardPage() {
 
         // Update the leaderboard data with the new entry
         setScoreData((prev) => {
-          // Create a new entry
+          // Create a new entry with updated level calculation
           const newEntry: GameScore = {
             id: `temp-${Date.now()}`,
             nickname,
             score,
             word_count: wordCount,
-            level,
+            level: calculateLevel(wordCount), // Recalculate level based on new thresholds
             time_taken: 120,
             main_word: "",
             created_at: new Date().toISOString(),
@@ -112,13 +126,13 @@ export default function LeaderboardPage() {
 
         // Also update word count data
         setWordData((prev) => {
-          // Create a new entry
+          // Create a new entry with updated level calculation
           const newEntry: GameScore = {
             id: `temp-${Date.now()}`,
             nickname,
             score,
             word_count: wordCount,
-            level,
+            level: calculateLevel(wordCount), // Recalculate level based on new thresholds
             time_taken: 120,
             main_word: "",
             created_at: new Date().toISOString(),
@@ -183,14 +197,11 @@ export default function LeaderboardPage() {
     }
   }, [fetchLeaderboard, handleRealtimeUpdate])
 
-  // Get level title
-  const getLevelTitle = (level: number) => {
-    // Ensure level is treated as a number
-    const numLevel = typeof level === "number" ? level : Number.parseInt(String(level), 10)
-
-    if (numLevel === 1) return "Word Novice"
-    if (numLevel === 2) return "Word Expert"
-    return "Word Guru"
+  // Get level title using the updated function
+  const getLevelTitle = (level: number, wordCount: number) => {
+    // Recalculate level based on word count to ensure consistency
+    const calculatedLevel = calculateLevel(wordCount)
+    return getLevelInfo(calculatedLevel).title
   }
 
   // Get current data based on active filter
@@ -201,7 +212,7 @@ export default function LeaderboardPage() {
     if (currentData.length > 0) {
       const levelsDistribution = currentData.reduce(
         (acc, item) => {
-          const level = item.level
+          const level = calculateLevel(item.word_count)
           acc[level] = (acc[level] || 0) + 1
           return acc
         },
@@ -308,45 +319,51 @@ export default function LeaderboardPage() {
           </div>
         ) : (
           <div className="space-y-2">
-            {currentData.map((item, index) => (
-              <motion.div
-                key={`${activeFilter}-${item.id}`}
-                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-zinc-800 to-zinc-900 p-2 shadow-md"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: index * 0.03 }}
-                layout
-              >
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 text-xs font-bold">
-                  {index === 0 ? (
-                    <Medal className="h-3 w-3 text-yellow-400" />
-                  ) : index === 1 ? (
-                    <Medal className="h-3 w-3 text-zinc-400" />
-                  ) : index === 2 ? (
-                    <Medal className="h-3 w-3 text-orange-400" />
-                  ) : (
-                    index + 1
-                  )}
-                </div>
+            {currentData.map((item, index) => {
+              // Calculate the level based on word count
+              const calculatedLevel = calculateLevel(item.word_count)
+              const levelTitle = getLevelInfo(calculatedLevel).title
 
-                <div className="flex-1">
-                  <div className="flex items-center gap-1">
-                    <User className="h-3 w-3 text-zinc-500" />
-                    <p className="font-medium text-sm">{item.nickname}</p>
+              return (
+                <motion.div
+                  key={`${activeFilter}-${item.id}`}
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-zinc-800 to-zinc-900 p-2 shadow-md"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: index * 0.03 }}
+                  layout
+                >
+                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 text-xs font-bold">
+                    {index === 0 ? (
+                      <Medal className="h-3 w-3 text-yellow-400" />
+                    ) : index === 1 ? (
+                      <Medal className="h-3 w-3 text-zinc-400" />
+                    ) : index === 2 ? (
+                      <Medal className="h-3 w-3 text-orange-400" />
+                    ) : (
+                      index + 1
+                    )}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-zinc-400">
-                    <p>{item.word_count} words</p>
-                  </div>
-                </div>
 
-                <div className="text-right">
-                  <p className="text-base font-bold text-orange-500">{item.score}</p>
-                  <p className="text-xs text-zinc-500">
-                    {getLevelTitle(item.level)} (Lvl {item.level})
-                  </p>
-                </div>
-              </motion.div>
-            ))}
+                  <div className="flex-1">
+                    <div className="flex items-center gap-1">
+                      <User className="h-3 w-3 text-zinc-500" />
+                      <p className="font-medium text-sm">{item.nickname}</p>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-zinc-400">
+                      <p>{item.word_count} words</p>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-base font-bold text-orange-500">{item.score}</p>
+                    <p className="text-xs text-zinc-500">
+                      {levelTitle} (Lvl {calculatedLevel})
+                    </p>
+                  </div>
+                </motion.div>
+              )
+            })}
           </div>
         )}
       </div>

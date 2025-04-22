@@ -42,9 +42,9 @@ export function calculateLevel(wordCount: number): number {
   let level = 1
 
   // Updated thresholds as requested
-  if (count <= 20) {
+  if (count <= 10) {
     level = 1
-  } else if (count <= 30) {
+  } else if (count <= 20) {
     level = 2
   } else {
     level = 3
