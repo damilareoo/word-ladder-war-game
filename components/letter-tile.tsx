@@ -72,6 +72,7 @@ export const SelectedLetter = memo(function SelectedLetter({ letter, onClick, in
       initial={{ opacity: 0, scale: 0.8, y: 10 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.8, y: -10 }}
+      whileTap={{ scale: 0.95 }}
       transition={{
         duration: 0.2,
         delay: index * 0.03,

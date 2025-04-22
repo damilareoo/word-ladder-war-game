@@ -7,6 +7,7 @@ import { Trophy, ArrowLeft, Medal, User, Star, RefreshCw } from "lucide-react"
 import { getSupabaseBrowserClient } from "@/lib/supabase"
 import { Footer } from "@/components/footer"
 import { getLeaderboardChannel, ensureChannelSubscribed, cleanupLeaderboardChannel } from "@/lib/realtime-utils"
+import { motion, AnimatePresence } from "framer-motion"
 
 type GameScore = {
   id: string
@@ -26,6 +27,7 @@ export default function LeaderboardPage() {
   const [activeFilter, setActiveFilter] = useState<"score" | "words">("score")
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [recentUpdate, setRecentUpdate] = useState<string | null>(null)
 
   // Fetch leaderboard data
   const fetchLeaderboard = useCallback(async () => {
@@ -71,6 +73,75 @@ export default function LeaderboardPage() {
     }
   }, [])
 
+  // Handle real-time updates
+  const handleRealtimeUpdate = useCallback(
+    (payload: any) => {
+      console.log("Received leaderboard refresh signal", payload)
+
+      // If we have immediate data, update the leaderboard without a full fetch
+      if (payload?.data) {
+        const { nickname, score, wordCount, level } = payload.data
+
+        // Show notification of update
+        setRecentUpdate(`${nickname} just scored ${score} points!`)
+
+        // Clear notification after 3 seconds
+        setTimeout(() => {
+          setRecentUpdate(null)
+        }, 3000)
+
+        // Update the leaderboard data with the new entry
+        setScoreData((prev) => {
+          // Create a new entry
+          const newEntry: GameScore = {
+            id: `temp-${Date.now()}`,
+            nickname,
+            score,
+            word_count: wordCount,
+            level,
+            time_taken: 120,
+            main_word: "",
+            created_at: new Date().toISOString(),
+          }
+
+          // Add to existing data and resort
+          const updated = [...prev, newEntry].sort((a, b) => b.score - a.score).slice(0, 50)
+
+          return updated
+        })
+
+        // Also update word count data
+        setWordData((prev) => {
+          // Create a new entry
+          const newEntry: GameScore = {
+            id: `temp-${Date.now()}`,
+            nickname,
+            score,
+            word_count: wordCount,
+            level,
+            time_taken: 120,
+            main_word: "",
+            created_at: new Date().toISOString(),
+          }
+
+          // Add to existing data and resort
+          const updated = [...prev, newEntry].sort((a, b) => b.word_count - a.word_count).slice(0, 50)
+
+          return updated
+        })
+
+        // Still fetch the full data after a short delay to ensure consistency
+        setTimeout(() => {
+          fetchLeaderboard()
+        }, 2000)
+      } else {
+        // If no immediate data, just fetch the full leaderboard
+        fetchLeaderboard()
+      }
+    },
+    [fetchLeaderboard],
+  )
+
   // Initial data fetch and subscription setup
   useEffect(() => {
     // Fetch data immediately
@@ -81,19 +152,36 @@ export default function LeaderboardPage() {
       await ensureChannelSubscribed()
 
       const channel = getLeaderboardChannel()
-      channel.on("broadcast", { event: "refresh" }, () => {
-        console.log("Received leaderboard refresh signal")
-        fetchLeaderboard()
-      })
+      if (channel) {
+        channel.on("broadcast", { event: "refresh" }, (payload) => {
+          handleRealtimeUpdate(payload)
+        })
+      }
     }
 
     setupSubscription()
+
+    // Check for latest game data in localStorage
+    const latestGameStr = localStorage.getItem("wlw-latest-game")
+    if (latestGameStr) {
+      try {
+        const latestGame = JSON.parse(latestGameStr)
+        // Only use if it's recent (last 10 seconds)
+        if (Date.now() - latestGame.timestamp < 10000) {
+          handleRealtimeUpdate({ data: latestGame })
+        }
+        // Clear it after using
+        localStorage.removeItem("wlw-latest-game")
+      } catch (e) {
+        console.error("Error parsing latest game data", e)
+      }
+    }
 
     // Cleanup subscription
     return () => {
       cleanupLeaderboardChannel()
     }
-  }, [fetchLeaderboard])
+  }, [fetchLeaderboard, handleRealtimeUpdate])
 
   // Get level title
   const getLevelTitle = (level: number) => {
@@ -148,6 +236,21 @@ export default function LeaderboardPage() {
           <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
         </Button>
       </div>
+
+      {/* Recent Update Notification */}
+      <AnimatePresence>
+        {recentUpdate && (
+          <motion.div
+            className="bg-green-500/20 text-green-400 text-center py-2 px-4 mx-auto rounded-full text-sm"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.3 }}
+          >
+            {recentUpdate}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Filter Buttons */}
       <div className="mx-auto w-full max-w-md p-2 flex-1">
@@ -206,9 +309,13 @@ export default function LeaderboardPage() {
         ) : (
           <div className="space-y-2">
             {currentData.map((item, index) => (
-              <div
+              <motion.div
                 key={`${activeFilter}-${item.id}`}
                 className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-zinc-800 to-zinc-900 p-2 shadow-md"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: index * 0.03 }}
+                layout
               >
                 <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 text-xs font-bold">
                   {index === 0 ? (
@@ -238,7 +345,7 @@ export default function LeaderboardPage() {
                     {getLevelTitle(item.level)} (Lvl {item.level})
                   </p>
                 </div>
-              </div>
+              </motion.div>
             ))}
           </div>
         )}

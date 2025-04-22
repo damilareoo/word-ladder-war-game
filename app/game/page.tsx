@@ -60,6 +60,36 @@ export default function GamePage() {
   const supabaseRef = useRef<any>(null)
   const mainWordRef = useRef<string>("")
 
+  // Clear current selection and return all selected letters to the pool
+  const clearSelection = useCallback(() => {
+    // Make all selected letters visible again
+    setLetters((prev) => {
+      const newLetters = [...prev]
+      selectedLetters.forEach(({ index }) => {
+        newLetters[index].visible = true
+      })
+      return newLetters
+    })
+
+    // Clear selected letters
+    setSelectedLetters([])
+  }, [selectedLetters])
+
+  // Start game when user interacts
+  const startGame = useCallback(() => {
+    if (!gameStarted && !gameEnded) {
+      console.log("Game started")
+      setGameStarted(true)
+
+      // Track game start after a small delay to ensure analytics is loaded
+      if (typeof window !== "undefined") {
+        setTimeout(() => {
+          trackGameStart(mainWordRef.current)
+        }, 100)
+      }
+    }
+  }, [gameStarted, gameEnded])
+
   // Save game data to Supabase
   const saveGameData = useCallback(async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
     if (!supabaseRef.current) return false
@@ -96,12 +126,13 @@ export default function GamePage() {
 
       console.log("Successfully saved to Supabase:", data)
 
-      // Trigger a leaderboard refresh
+      // Trigger a leaderboard refresh with immediate broadcast
       await refreshLeaderboard({
         score: finalScore,
         nickname,
         wordCount,
         level,
+        immediate: true,
       })
 
       return true
@@ -277,21 +308,6 @@ export default function GamePage() {
     }
   }, [gameStarted, gameEnded, isLoading, endGame])
 
-  // Start game when user interacts
-  const startGame = useCallback(() => {
-    if (!gameStarted && !gameEnded) {
-      console.log("Game started")
-      setGameStarted(true)
-
-      // Track game start after a small delay to ensure analytics is loaded
-      if (typeof window !== "undefined") {
-        setTimeout(() => {
-          trackGameStart(mainWordRef.current)
-        }, 100)
-      }
-    }
-  }, [gameStarted, gameEnded])
-
   // Update score whenever validWords changes
   useEffect(() => {
     if (validWords.length > 0) {
@@ -369,7 +385,7 @@ export default function GamePage() {
     [selectedLetters],
   )
 
-  // Handle word submission with optimized validation
+  // Handle word submission with optimized validation and immediate feedback
   const handleSubmitWord = useCallback(async () => {
     // Prevent multiple submissions at once
     if (processingSubmissionRef.current) {
@@ -392,44 +408,45 @@ export default function GamePage() {
     const word = selectedLetters.map((item) => item.letter).join("")
     console.log("Submitting word:", word)
 
-    // Check if word is at least 3 letters
-    if (word.length < 3) {
-      console.log("Word too short:", word)
-      setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
-
-      // Return letters to the pool
-      clearSelection()
-
-      // Track invalid word submission
-      if (typeof window !== "undefined") {
-        trackWordSubmitted(word, false)
-      }
-
-      processingSubmissionRef.current = false
-      return
-    }
-
-    // Check if word has already been submitted
-    if (validWords.includes(word)) {
-      console.log("Word already submitted:", word)
-      setSubmittedWords((prev) => [...prev, { word, status: "duplicate" }])
-
-      // Return letters to the pool
-      clearSelection()
-
-      // Track duplicate word submission
-      if (typeof window !== "undefined") {
-        trackWordSubmitted(word, false)
-      }
-
-      processingSubmissionRef.current = false
-      return
-    }
-
-    // Show loading state for better UX
-    setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
-
     try {
+      // Check if word is at least 3 letters
+      if (word.length < 3) {
+        console.log("Word too short:", word)
+        // Immediately show as invalid
+        setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
+
+        // Track invalid word submission
+        if (typeof window !== "undefined") {
+          trackWordSubmitted(word, false)
+        }
+
+        // Return letters to the pool
+        clearSelection()
+        processingSubmissionRef.current = false
+        return
+      }
+
+      // Check if word has already been submitted
+      if (validWords.includes(word)) {
+        console.log("Word already submitted:", word)
+        // Immediately show as duplicate
+        setSubmittedWords((prev) => [...prev, { word, status: "duplicate" }])
+
+        // Track duplicate word submission
+        if (typeof window !== "undefined") {
+          trackWordSubmitted(word, false)
+        }
+
+        // Return letters to the pool
+        clearSelection()
+        processingSubmissionRef.current = false
+        return
+      }
+
+      // Optimistically assume the word is valid for immediate feedback
+      // Add to submitted words with "valid" status right away
+      setSubmittedWords((prev) => [...prev, { word, status: "valid" }])
+
       // Check if it's a valid English word using the dictionary API
       console.log("Checking if word is valid:", word)
       const isValid = await isValidEnglishWord(word)
@@ -438,13 +455,6 @@ export default function GamePage() {
         console.log("Word is valid:", word)
         const newValidWords = [...validWords, word]
         setValidWords(newValidWords)
-
-        // Update the last submitted word status
-        setSubmittedWords((prev) => {
-          const updated = [...prev]
-          updated[updated.length - 1] = { word, status: "valid" }
-          return updated
-        })
 
         // Calculate and update score
         const newScore = calculateScore(newValidWords)
@@ -456,8 +466,16 @@ export default function GamePage() {
           trackWordSubmitted(word, true)
         }
       } else {
-        // Word is already marked as invalid in the loading state
+        // If the word is actually invalid, update the status
         console.log("Word is invalid:", word)
+        setSubmittedWords((prev) => {
+          const updated = [...prev]
+          const lastIndex = updated.length - 1
+          if (updated[lastIndex]?.word === word) {
+            updated[lastIndex] = { word, status: "invalid" }
+          }
+          return updated
+        })
 
         // Track invalid word submission
         if (typeof window !== "undefined") {
@@ -466,6 +484,15 @@ export default function GamePage() {
       }
     } catch (error) {
       console.error("Error validating word:", error)
+      // If there's an error, mark as invalid
+      setSubmittedWords((prev) => {
+        const updated = [...prev]
+        const lastIndex = updated.length - 1
+        if (updated[lastIndex]?.word === word) {
+          updated[lastIndex] = { word, status: "invalid" }
+        }
+        return updated
+      })
     } finally {
       // Clear the selected letters and return them to the pool
       clearSelection()
@@ -485,22 +512,7 @@ export default function GamePage() {
       // Reset processing flag
       processingSubmissionRef.current = false
     }
-  }, [gameStarted, gameEnded, selectedLetters, validWords, startGame])
-
-  // Clear current selection and return all selected letters to the pool
-  const clearSelection = useCallback(() => {
-    // Make all selected letters visible again
-    setLetters((prev) => {
-      const newLetters = [...prev]
-      selectedLetters.forEach(({ index }) => {
-        newLetters[index].visible = true
-      })
-      return newLetters
-    })
-
-    // Clear selected letters
-    setSelectedLetters([])
-  }, [selectedLetters])
+  }, [gameStarted, gameEnded, selectedLetters, validWords, startGame, clearSelection])
 
   // Format time as MM:SS
   const formatTime = useCallback((seconds: number) => {

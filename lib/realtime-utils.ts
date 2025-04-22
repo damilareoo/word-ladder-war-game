@@ -32,7 +32,9 @@ export async function ensureChannelSubscribed() {
     try {
       const channel = getLeaderboardChannel()
       if (channel && channel.state !== "joined") {
-        await channel.subscribe()
+        await channel.subscribe((status) => {
+          console.log(`Leaderboard channel status: ${status}`)
+        })
         isSubscribed = true
       } else if (channel) {
         isSubscribed = true
@@ -53,6 +55,7 @@ export async function refreshLeaderboard(data: {
   nickname: string
   wordCount: number
   level: number
+  immediate?: boolean
 }) {
   if (typeof window === "undefined") return false
 
@@ -64,16 +67,39 @@ export async function refreshLeaderboard(data: {
     const channel = getLeaderboardChannel()
     if (!channel) return false
 
+    // Send the message with the game data for immediate updates
     await channel.send({
       type: "broadcast",
       event: "refresh",
       payload: {
         timestamp: Date.now(),
+        data: data.immediate
+          ? {
+              score: data.score,
+              nickname: data.nickname,
+              wordCount: data.wordCount,
+              level: data.level,
+            }
+          : undefined,
       },
     })
 
     // Set the refresh flag in localStorage as a fallback
     localStorage.setItem("wlw-refresh-leaderboard", "true")
+
+    // Also store the latest game data for immediate updates
+    if (data.immediate) {
+      localStorage.setItem(
+        "wlw-latest-game",
+        JSON.stringify({
+          score: data.score,
+          nickname: data.nickname,
+          wordCount: data.wordCount,
+          level: data.level,
+          timestamp: Date.now(),
+        }),
+      )
+    }
 
     return true
   } catch (error) {
