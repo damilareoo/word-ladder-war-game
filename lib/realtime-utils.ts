@@ -65,7 +65,25 @@ export async function refreshLeaderboard(data: {
 
     // Then send the message
     const channel = getLeaderboardChannel()
-    if (!channel) return false
+    if (!channel) {
+      // Fallback to localStorage if channel is not available
+      localStorage.setItem("wlw-refresh-leaderboard", "true")
+
+      if (data.immediate) {
+        localStorage.setItem(
+          "wlw-latest-game",
+          JSON.stringify({
+            score: data.score,
+            nickname: data.nickname,
+            wordCount: data.wordCount,
+            level: data.level,
+            timestamp: Date.now(),
+          }),
+        )
+      }
+
+      return false
+    }
 
     // Send the message with the game data for immediate updates
     await channel.send({
@@ -104,6 +122,23 @@ export async function refreshLeaderboard(data: {
     return true
   } catch (error) {
     console.error("Error sending leaderboard refresh:", error)
+
+    // Fallback to localStorage
+    localStorage.setItem("wlw-refresh-leaderboard", "true")
+
+    if (data.immediate) {
+      localStorage.setItem(
+        "wlw-latest-game",
+        JSON.stringify({
+          score: data.score,
+          nickname: data.nickname,
+          wordCount: data.wordCount,
+          level: data.level,
+          timestamp: Date.now(),
+        }),
+      )
+    }
+
     return false
   }
 }

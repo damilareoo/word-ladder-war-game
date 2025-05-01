@@ -65,8 +65,8 @@
     "vue": "latest",
     "vue-router": "latest",
     "framer-motion": "latest",
-    "@supabase/supabase-js": "latest",
-    "@vercel/analytics": "latest"
+    "@vercel/analytics": "latest",
+    "@supabase/supabase-js": "latest"
   },
   "devDependencies": {
     "@types/node": "^22",
