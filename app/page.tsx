@@ -1,14 +1,58 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
-import { ArrowRight } from "lucide-react"
+import { ArrowRight, Wifi, WifiOff, Database } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Footer } from "@/components/footer"
 import { motion } from "framer-motion"
+import { gameService } from "@/lib/game-service"
+import { getSupabaseStatus } from "@/lib/supabase"
 
 export default function Home() {
   const [isHovering, setIsHovering] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState({
+    database: false,
+    realtime: false,
+    testing: false,
+  })
+
+  // Test connections on mount
+  useEffect(() => {
+    const testConnections = async () => {
+      setConnectionStatus((prev) => ({ ...prev, testing: true }))
+
+      try {
+        // Test database connection
+        const dbTest = await gameService.testConnection()
+
+        // Get Supabase status
+        const supabaseStatus = getSupabaseStatus()
+
+        // Get service status
+        const serviceStatus = gameService.getStatus()
+
+        setConnectionStatus({
+          database: dbTest.success && supabaseStatus.isConfigured,
+          realtime: serviceStatus.isRealtimeConnected,
+          testing: false,
+        })
+      } catch (error) {
+        console.error("Error testing connections:", error)
+        setConnectionStatus({
+          database: false,
+          realtime: false,
+          testing: false,
+        })
+      }
+    }
+
+    testConnections()
+
+    // Update status periodically
+    const interval = setInterval(testConnections, 10000)
+    return () => clearInterval(interval)
+  }, [])
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-between bg-zinc-900 text-cream">
@@ -40,6 +84,31 @@ export default function Home() {
           >
             Form words from a single word. Climb the ladder. Flex your vocabulary skills.
           </motion.p>
+
+          {/* Connection Status */}
+          <motion.div
+            className="flex items-center justify-center gap-4 text-xs py-2"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5, delay: 0.5 }}
+          >
+            <div className="flex items-center gap-1">
+              <Database className={`h-3 w-3 ${connectionStatus.database ? "text-green-400" : "text-zinc-500"}`} />
+              <span className={connectionStatus.database ? "text-green-400" : "text-zinc-500"}>
+                {connectionStatus.testing ? "Testing..." : connectionStatus.database ? "Database" : "Offline"}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              {connectionStatus.realtime ? (
+                <Wifi className="h-3 w-3 text-blue-400" />
+              ) : (
+                <WifiOff className="h-3 w-3 text-zinc-500" />
+              )}
+              <span className={connectionStatus.realtime ? "text-blue-400" : "text-zinc-500"}>
+                {connectionStatus.realtime ? "Live" : "Static"}
+              </span>
+            </div>
+          </motion.div>
 
           <motion.div
             initial={{ opacity: 0, y: 20 }}

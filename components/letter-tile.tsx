@@ -10,51 +10,49 @@ interface LetterTileProps {
   position?: number
 }
 
-// Optimized letter tile component with memoization
+// Enhanced letter tile with better visual feedback
 export const LetterTile = memo(function LetterTile({ letter, onClick, isSelected = false, position }: LetterTileProps) {
-  // Use useCallback to prevent unnecessary re-renders
   const handleClick = useCallback(() => {
     onClick()
   }, [onClick])
 
-  // Simplified animation for better performance on mobile
-  const animationProps = {
-    initial: position !== undefined ? { y: 5, opacity: 0 } : undefined,
-    animate: position !== undefined ? { y: 0, opacity: 1 } : undefined,
-    transition: {
-      delay: position !== undefined ? position * 0.02 : 0, // Reduced delay for faster appearance
-      type: "spring",
-      stiffness: 400,
-      damping: 20,
-    },
-  }
-
   return (
-    <motion.div
-      className="relative w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center text-xl font-bold rounded-lg cursor-pointer select-none touch-manipulation"
+    <motion.button
+      className="relative w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center text-xl sm:text-2xl font-bold rounded-xl cursor-pointer select-none touch-manipulation group"
+      whileHover={{ scale: 1.05, y: -2 }}
       whileTap={{ scale: 0.95 }}
       onClick={handleClick}
-      {...animationProps}
+      initial={position !== undefined ? { y: 20, opacity: 0, scale: 0.8 } : undefined}
+      animate={position !== undefined ? { y: 0, opacity: 1, scale: 1 } : undefined}
+      transition={{
+        delay: position !== undefined ? position * 0.05 : 0,
+        type: "spring",
+        stiffness: 400,
+        damping: 25,
+      }}
       style={{
-        WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
-        touchAction: "manipulation", // Improve touch handling
-        userSelect: "none", // Prevent text selection
+        WebkitTapHighlightColor: "transparent",
+        touchAction: "manipulation",
+        userSelect: "none",
       }}
     >
-      {/* Base shadow - simplified for better performance */}
-      <div className="absolute inset-0 bg-black/40 rounded-lg translate-y-[2px]"></div>
+      {/* Shadow Layer */}
+      <div className="absolute inset-0 bg-black/40 rounded-xl translate-y-1 group-hover:translate-y-0.5 transition-transform duration-150" />
 
-      {/* Tile base */}
-      <div className="absolute inset-0 bg-gradient-to-br from-zinc-800 to-black rounded-lg"></div>
+      {/* Base Layer */}
+      <div className="absolute inset-0 bg-gradient-to-br from-zinc-700 via-zinc-800 to-zinc-900 rounded-xl border border-zinc-600/50" />
 
-      {/* Tile face with letter */}
-      <div className="absolute inset-0.5 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-lg flex items-center justify-center text-white">
-        <span className="text-2xl">{letter}</span>
+      {/* Surface Layer */}
+      <div className="absolute inset-0.5 bg-gradient-to-br from-zinc-600 to-zinc-800 rounded-lg flex items-center justify-center">
+        <span className="text-white font-black tracking-wide drop-shadow-sm">{letter}</span>
       </div>
 
-      {/* Highlight effect - simplified for better performance */}
-      <div className="absolute inset-x-0 top-0 h-1/5 bg-white/10 rounded-t-lg"></div>
-    </motion.div>
+      {/* Highlight Effect */}
+      <div className="absolute inset-x-0 top-0 h-1/3 bg-gradient-to-b from-white/20 to-transparent rounded-t-xl" />
+
+      {/* Hover Glow */}
+      <div className="absolute inset-0 rounded-xl bg-orange-400/0 group-hover:bg-orange-400/10 transition-colors duration-200" />
+    </motion.button>
   )
 })
 
@@ -66,16 +64,20 @@ interface SelectedLetterProps {
 
 export const SelectedLetter = memo(function SelectedLetter({ letter, onClick, index }: SelectedLetterProps) {
   return (
-    <motion.div
-      className="relative w-10 h-10 bg-gradient-to-br from-orange-500/80 to-orange-600/80 rounded-lg flex items-center justify-center text-xl font-bold cursor-pointer shadow-md touch-manipulation"
+    <motion.button
+      className="relative w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-orange-400 to-orange-600 rounded-xl flex items-center justify-center text-lg sm:text-xl font-bold cursor-pointer shadow-lg touch-manipulation group border border-orange-300/30"
       onClick={onClick}
-      initial={{ opacity: 0, scale: 0.8, y: 10 }}
+      initial={{ opacity: 0, scale: 0.5, y: 20 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.8, y: -10 }}
-      whileTap={{ scale: 0.95 }}
+      exit={{ opacity: 0, scale: 0.5, y: -20 }}
+      whileHover={{ scale: 1.1, y: -2 }}
+      whileTap={{ scale: 0.9 }}
       transition={{
-        duration: 0.2,
-        delay: index * 0.03,
+        duration: 0.3,
+        delay: index * 0.05,
+        type: "spring",
+        stiffness: 400,
+        damping: 25,
       }}
       style={{
         WebkitTapHighlightColor: "transparent",
@@ -83,8 +85,15 @@ export const SelectedLetter = memo(function SelectedLetter({ letter, onClick, in
         userSelect: "none",
       }}
     >
-      <span className="text-white text-xl">{letter}</span>
-    </motion.div>
+      {/* Glow Effect */}
+      <div className="absolute inset-0 rounded-xl bg-orange-400/20 blur-sm group-hover:bg-orange-300/30 transition-colors duration-200" />
+
+      {/* Letter */}
+      <span className="relative z-10 text-white font-black tracking-wide drop-shadow-sm">{letter}</span>
+
+      {/* Highlight */}
+      <div className="absolute inset-x-0 top-0 h-1/3 bg-gradient-to-b from-white/30 to-transparent rounded-t-xl" />
+    </motion.button>
   )
 })
 
@@ -95,17 +104,18 @@ interface EmptyTileProps {
 
 export const EmptyTile = memo(function EmptyTile({ onClick, letter }: EmptyTileProps) {
   return (
-    <motion.div
-      className="w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center text-xl font-bold bg-zinc-700/50 rounded-lg cursor-pointer touch-manipulation"
-      whileTap={{ scale: 0.97 }}
+    <motion.button
+      className="w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center text-xl sm:text-2xl font-bold bg-zinc-800/50 border-2 border-dashed border-zinc-600/50 rounded-xl cursor-pointer touch-manipulation hover:border-zinc-500/70 hover:bg-zinc-700/50 transition-all duration-200"
+      whileHover={{ scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
       onClick={onClick}
       style={{
-        WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
-        touchAction: "manipulation", // Improve touch handling
-        userSelect: "none", // Prevent text selection
+        WebkitTapHighlightColor: "transparent",
+        touchAction: "manipulation",
+        userSelect: "none",
       }}
     >
-      {letter}
-    </motion.div>
+      {letter && <span className="text-zinc-500">{letter}</span>}
+    </motion.button>
   )
 })

@@ -1,523 +1,540 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Trophy, ArrowLeft, Medal, User, Star, RefreshCw, AlertTriangle } from "lucide-react"
-import { getSupabaseBrowserClient } from "@/lib/supabase"
+import {
+  Trophy,
+  ArrowLeft,
+  Medal,
+  User,
+  Star,
+  RefreshCw,
+  AlertTriangle,
+  Zap,
+  Wifi,
+  WifiOff,
+  Clock,
+  Database,
+  RotateCcw,
+} from "lucide-react"
 import { Footer } from "@/components/footer"
-import { getLeaderboardChannel, ensureChannelSubscribed, cleanupLeaderboardChannel } from "@/lib/realtime-utils"
 import { motion, AnimatePresence } from "framer-motion"
-import { calculateLevel, getLevelInfo } from "@/lib/game-utils"
+import { getLevelInfo } from "@/lib/game-utils"
+import { gameService, type LeaderboardData } from "@/lib/game-service"
+import { subscribeToUpdates, type LeaderboardUpdate, getConnectionStatus } from "@/lib/realtime-leaderboard"
+import { getSupabaseStatus } from "@/lib/supabase"
 
-type GameScore = {
-  id: string
-  nickname: string
-  score: number
-  word_count: number
-  time_taken: number
-  main_word: string
-  level: number
-  created_at: string
+interface ConnectionStatus {
+  isConfigured: boolean
+  isRealtimeConnected: boolean
+  isRealtimeConnecting: boolean
+  lastUpdate: number
+  error?: string
 }
-
-// Fallback data in case the fetch fails
-const FALLBACK_DATA: GameScore[] = [
-  {
-    id: "fallback-1",
-    nickname: "WordMaster",
-    score: 250,
-    word_count: 15,
-    time_taken: 120,
-    main_word: "CHALLENGE",
-    level: 2,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "fallback-2",
-    nickname: "LexiconPro",
-    score: 180,
-    word_count: 12,
-    time_taken: 118,
-    main_word: "VOCABULARY",
-    level: 2,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "fallback-3",
-    nickname: "WordSmith",
-    score: 150,
-    word_count: 8,
-    time_taken: 115,
-    main_word: "DICTIONARY",
-    level: 1,
-    created_at: new Date().toISOString(),
-  },
-]
 
 export default function LeaderboardPage() {
   const router = useRouter()
-  const [scoreData, setScoreData] = useState<GameScore[]>([])
-  const [wordData, setWordData] = useState<GameScore[]>([])
+  const [leaderboardData, setLeaderboardData] = useState<LeaderboardData>({
+    byScore: [],
+    byWords: [],
+    lastUpdate: 0,
+    isSampleData: true,
+  })
   const [activeFilter, setActiveFilter] = useState<"score" | "words">("score")
   const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [recentUpdate, setRecentUpdate] = useState<string | null>(null)
-  const [retryCount, setRetryCount] = useState(0)
-  const [usingFallbackData, setUsingFallbackData] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
+    isConfigured: false,
+    isRealtimeConnected: false,
+    isRealtimeConnecting: false,
+    lastUpdate: 0,
+  })
+  const [recentUpdates, setRecentUpdates] = useState<string[]>([])
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [showConnectionDetails, setShowConnectionDetails] = useState(false)
 
-  // Fetch leaderboard data with improved error handling
-  const fetchLeaderboard = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
+  // Refs for managing subscriptions and updates
+  const unsubscribeRef = useRef<(() => void) | null>(null)
+  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Fetch leaderboard data with better error handling
+  const fetchLeaderboard = useCallback(async (forceRefresh = false) => {
+    setIsRefreshing(true)
 
     try {
-      // Try to get the Supabase client
-      let supabase
-      try {
-        supabase = getSupabaseBrowserClient()
-      } catch (clientError) {
-        console.error("Error initializing Supabase client:", clientError)
-        throw new Error("Could not connect to the database. Please try again later.")
-      }
+      console.log(`📋 Fetching leaderboard (force: ${forceRefresh})...`)
+      const data = await gameService.getLeaderboard(forceRefresh)
+      setLeaderboardData(data)
 
-      // Fetch score data with timeout
-      const fetchScoreData = async () => {
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout
-
-        try {
-          const { data, error } = await supabase
-            .from("game_scores")
-            .select("*")
-            .order("score", { ascending: false })
-            .limit(50)
-            .abortSignal(controller.signal)
-
-          clearTimeout(timeoutId)
-
-          if (error) throw error
-          return data || []
-        } catch (error) {
-          clearTimeout(timeoutId)
-          throw error
-        }
-      }
-
-      // Fetch word count data with timeout
-      const fetchWordData = async () => {
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout
-
-        try {
-          const { data, error } = await supabase
-            .from("game_scores")
-            .select("*")
-            .order("word_count", { ascending: false })
-            .limit(50)
-            .abortSignal(controller.signal)
-
-          clearTimeout(timeoutId)
-
-          if (error) throw error
-          return data || []
-        } catch (error) {
-          clearTimeout(timeoutId)
-          throw error
-        }
-      }
-
-      // Try to fetch both datasets
-      let scoreResults: GameScore[] = []
-      let wordResults: GameScore[] = []
-
-      try {
-        // Use Promise.allSettled to continue even if one fails
-        const [scorePromise, wordPromise] = await Promise.allSettled([fetchScoreData(), fetchWordData()])
-
-        if (scorePromise.status === "fulfilled") {
-          scoreResults = scorePromise.value
-        } else {
-          console.error("Error fetching score data:", scorePromise.reason)
-        }
-
-        if (wordPromise.status === "fulfilled") {
-          wordResults = wordPromise.value
-        } else {
-          console.error("Error fetching word data:", wordPromise.reason)
-        }
-
-        // If both failed, throw an error
-        if (scorePromise.status === "rejected" && wordPromise.status === "rejected") {
-          throw new Error("Failed to fetch leaderboard data")
-        }
-      } catch (fetchError) {
-        console.error("Error during fetch operations:", fetchError)
-        throw fetchError
-      }
-
-      // Update level information based on new thresholds
-      const updatedScoreResults = scoreResults.map((item) => ({
-        ...item,
-        level: calculateLevel(item.word_count),
+      setConnectionStatus((prev) => ({
+        ...prev,
+        lastUpdate: Date.now(),
+        error: data.error,
       }))
 
-      const updatedWordResults = wordResults.map((item) => ({
-        ...item,
-        level: calculateLevel(item.word_count),
-      }))
-
-      // Log the data for debugging
-      console.log("Fetched score data:", updatedScoreResults)
-      console.log("Fetched word data:", updatedWordResults)
-
-      // Update state with both datasets
-      setScoreData(updatedScoreResults)
-      setWordData(updatedWordResults)
-      setUsingFallbackData(false)
-
-      // Clear localStorage flag
-      localStorage.removeItem("wlw-refresh-leaderboard")
+      if (forceRefresh) {
+        console.log("🔄 Leaderboard force refreshed")
+      }
     } catch (error) {
-      console.error("Error fetching leaderboard:", error)
-
-      // Use fallback data if we have no data yet
-      if (scoreData.length === 0 || wordData.length === 0) {
-        console.log("Using fallback data due to fetch error")
-        const fallbackWithLevels = FALLBACK_DATA.map((item) => ({
-          ...item,
-          level: calculateLevel(item.word_count),
-        }))
-
-        setScoreData(fallbackWithLevels)
-        setWordData([...fallbackWithLevels].sort((a, b) => b.word_count - a.word_count))
-        setUsingFallbackData(true)
-        setError("Using sample data. Could not connect to the leaderboard.")
-      } else {
-        setError("Failed to refresh leaderboard. Using last available data.")
-      }
+      console.error("❌ Error fetching leaderboard:", error)
+      setConnectionStatus((prev) => ({
+        ...prev,
+        error: error instanceof Error ? error.message : "Unknown error",
+      }))
     } finally {
       setIsLoading(false)
+      setIsRefreshing(false)
     }
-  }, [scoreData.length, wordData.length])
+  }, [])
 
-  // Handle real-time updates with improved error handling
+  // Handle real-time updates with better error handling
   const handleRealtimeUpdate = useCallback(
-    (payload: any) => {
-      console.log("Received leaderboard refresh signal", payload)
+    (update: LeaderboardUpdate) => {
+      console.log("📡 Received real-time update:", update)
 
-      // If we have immediate data, update the leaderboard without a full fetch
-      if (payload?.data) {
-        const { nickname, score, wordCount, level } = payload.data
+      try {
+        switch (update.type) {
+          case "new_score":
+            if (update.data && !Array.isArray(update.data)) {
+              const newScore = update.data
 
-        // Show notification of update
-        setRecentUpdate(`${nickname} just scored ${score} points!`)
+              // Add to recent updates
+              setRecentUpdates((prev) => {
+                const message = `${newScore.nickname} scored ${newScore.score} points!`
+                const newUpdates = [message, ...prev].slice(0, 3) // Keep only last 3
+                return newUpdates
+              })
 
-        // Clear notification after 3 seconds
-        setTimeout(() => {
-          setRecentUpdate(null)
-        }, 3000)
+              // Update leaderboard data
+              setLeaderboardData((prev) => {
+                const updatedByScore = [newScore, ...prev.byScore].sort((a, b) => b.score - a.score).slice(0, 50)
 
-        // Update the leaderboard data with the new entry
-        setScoreData((prev) => {
-          // Create a new entry with updated level calculation
-          const newEntry: GameScore = {
-            id: `temp-${Date.now()}`,
-            nickname,
-            score,
-            word_count: wordCount,
-            level: calculateLevel(wordCount), // Recalculate level based on new thresholds
-            time_taken: 120,
-            main_word: "",
-            created_at: new Date().toISOString(),
-          }
+                const updatedByWords = [newScore, ...prev.byWords]
+                  .sort((a, b) => b.word_count - a.word_count)
+                  .slice(0, 50)
 
-          // Add to existing data and resort
-          const updated = [...prev, newEntry].sort((a, b) => b.score - a.score).slice(0, 50)
+                return {
+                  ...prev,
+                  byScore: updatedByScore,
+                  byWords: updatedByWords,
+                  lastUpdate: Date.now(),
+                }
+              })
 
-          return updated
-        })
+              // Clear the update message after 5 seconds
+              setTimeout(() => {
+                setRecentUpdates((prev) => prev.slice(1))
+              }, 5000)
+            }
+            break
 
-        // Also update word count data
-        setWordData((prev) => {
-          // Create a new entry with updated level calculation
-          const newEntry: GameScore = {
-            id: `temp-${Date.now()}`,
-            nickname,
-            score,
-            word_count: wordCount,
-            level: calculateLevel(wordCount), // Recalculate level based on new thresholds
-            time_taken: 120,
-            main_word: "",
-            created_at: new Date().toISOString(),
-          }
+          case "bulk_update":
+            if (update.data && Array.isArray(update.data)) {
+              // Refresh the entire leaderboard
+              fetchLeaderboard(true)
+            }
+            break
 
-          // Add to existing data and resort
-          const updated = [...prev, newEntry].sort((a, b) => b.word_count - a.word_count).slice(0, 50)
-
-          return updated
-        })
-
-        // Still fetch the full data after a short delay to ensure consistency
-        setTimeout(() => {
-          fetchLeaderboard().catch((err) => {
-            console.error("Error refreshing leaderboard after update:", err)
-          })
-        }, 2000)
-      } else {
-        // If no immediate data, just fetch the full leaderboard
-        fetchLeaderboard().catch((err) => {
-          console.error("Error refreshing leaderboard after signal:", err)
-        })
+          case "connection_status":
+            setConnectionStatus((prev) => ({
+              ...prev,
+              isRealtimeConnected: true,
+              lastUpdate: Date.now(),
+            }))
+            break
+        }
+      } catch (error) {
+        console.error("❌ Error handling real-time update:", error)
       }
     },
     [fetchLeaderboard],
   )
 
-  // Initial data fetch and subscription setup with retry logic
+  // Update connection status periodically
+  const updateConnectionStatus = useCallback(() => {
+    try {
+      const supabaseStatus = getSupabaseStatus()
+      const serviceStatus = gameService.getStatus()
+      const realtimeStatus = getConnectionStatus()
+
+      setConnectionStatus((prev) => ({
+        ...prev,
+        isConfigured: supabaseStatus.isConfigured,
+        isRealtimeConnected: realtimeStatus.isConnected,
+        isRealtimeConnecting: realtimeStatus.isConnecting,
+      }))
+    } catch (error) {
+      console.error("Error updating connection status:", error)
+    }
+  }, [])
+
+  // Initialize component
   useEffect(() => {
-    const initializeLeaderboard = async () => {
-      try {
-        // Fetch data immediately
-        await fetchLeaderboard()
+    console.log("🚀 Initializing leaderboard page...")
 
-        // Set up real-time subscription
-        try {
-          await ensureChannelSubscribed()
+    // Initial data fetch
+    fetchLeaderboard()
 
-          const channel = getLeaderboardChannel()
-          if (channel) {
-            channel.on("broadcast", { event: "refresh" }, (payload) => {
-              handleRealtimeUpdate(payload)
-            })
-          }
-        } catch (subError) {
-          console.error("Error setting up real-time subscription:", subError)
-          // Continue even if subscription fails
-        }
-
-        // Check for latest game data in localStorage
-        const latestGameStr = localStorage.getItem("wlw-latest-game")
-        if (latestGameStr) {
-          try {
-            const latestGame = JSON.parse(latestGameStr)
-            // Only use if it's recent (last 10 seconds)
-            if (Date.now() - latestGame.timestamp < 10000) {
-              handleRealtimeUpdate({ data: latestGame })
-            }
-            // Clear it after using
-            localStorage.removeItem("wlw-latest-game")
-          } catch (e) {
-            console.error("Error parsing latest game data", e)
-          }
-        }
-      } catch (error) {
-        console.error("Error initializing leaderboard:", error)
-
-        // Implement retry logic (max 3 retries)
-        if (retryCount < 3) {
-          console.log(`Retrying leaderboard initialization (attempt ${retryCount + 1}/3)...`)
-          setRetryCount((prev) => prev + 1)
-          setTimeout(initializeLeaderboard, 1000) // Retry after 1 second
-        } else {
-          console.log("Max retry attempts reached, using fallback data")
-          // Use fallback data after max retries
-          const fallbackWithLevels = FALLBACK_DATA.map((item) => ({
-            ...item,
-            level: calculateLevel(item.word_count),
-          }))
-
-          setScoreData(fallbackWithLevels)
-          setWordData([...fallbackWithLevels].sort((a, b) => b.word_count - a.word_count))
-          setUsingFallbackData(true)
-          setError("Could not connect to the leaderboard. Showing sample data.")
-        }
-      }
+    // Set up real-time subscription
+    try {
+      unsubscribeRef.current = subscribeToUpdates(handleRealtimeUpdate)
+      console.log("📡 Real-time subscription established")
+    } catch (error) {
+      console.error("❌ Error setting up real-time subscription:", error)
     }
 
-    initializeLeaderboard()
+    // Update connection status periodically
+    const statusInterval = setInterval(updateConnectionStatus, 5000)
+    updateConnectionStatus() // Initial call
 
-    // Cleanup subscription
+    // Cleanup
     return () => {
-      try {
-        cleanupLeaderboardChannel()
-      } catch (error) {
-        console.error("Error cleaning up leaderboard channel:", error)
+      console.log("🧹 Cleaning up leaderboard page...")
+
+      if (unsubscribeRef.current) {
+        try {
+          unsubscribeRef.current()
+        } catch (error) {
+          console.error("Error unsubscribing:", error)
+        }
+      }
+
+      clearInterval(statusInterval)
+
+      if (updateTimeoutRef.current) {
+        clearTimeout(updateTimeoutRef.current)
       }
     }
-  }, [fetchLeaderboard, handleRealtimeUpdate, retryCount])
+  }, [fetchLeaderboard, handleRealtimeUpdate, updateConnectionStatus])
 
-  // Get level title using the updated function
-  const getLevelTitle = (level: number, wordCount: number) => {
-    // Recalculate level based on word count to ensure consistency
-    const calculatedLevel = calculateLevel(wordCount)
-    return getLevelInfo(calculatedLevel).title
-  }
+  // Handle manual refresh
+  const handleRefresh = useCallback(() => {
+    console.log("🔄 Manual refresh triggered")
+    fetchLeaderboard(true)
+  }, [fetchLeaderboard])
+
+  // Handle force reconnect
+  const handleForceReconnect = useCallback(async () => {
+    console.log("🔄 Force reconnect triggered")
+    setIsRefreshing(true)
+
+    try {
+      const success = await gameService.forceReconnect()
+      if (success) {
+        console.log("✅ Force reconnect successful")
+        // Refresh data after successful reconnection
+        await fetchLeaderboard(true)
+      } else {
+        console.warn("⚠️ Force reconnect failed")
+      }
+    } catch (error) {
+      console.error("❌ Error during force reconnect:", error)
+    } finally {
+      setIsRefreshing(false)
+    }
+  }, [fetchLeaderboard])
 
   // Get current data based on active filter
-  const currentData = activeFilter === "score" ? scoreData : wordData
+  const currentData = activeFilter === "score" ? leaderboardData.byScore : leaderboardData.byWords
+
+  // Format last update time
+  const formatLastUpdate = (timestamp: number) => {
+    if (!timestamp) return "Never"
+    const diff = Date.now() - timestamp
+    if (diff < 60000) return "Just now"
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
+    return `${Math.floor(diff / 3600000)}h ago`
+  }
 
   return (
-    <main className="flex min-h-screen flex-col bg-zinc-900 text-cream">
-      {/* Header */}
-      <div className="sticky top-0 z-10 flex items-center justify-between bg-zinc-900/95 p-3 backdrop-blur-sm">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => router.push("/")}
-          className="text-zinc-400 hover:text-cream h-8 w-8"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <h1 className="text-base font-bold">Global Leaderboard</h1>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => {
-            setRetryCount(0) // Reset retry count
-            fetchLeaderboard()
-          }}
-          className="text-zinc-400 hover:text-cream h-8 w-8"
-          disabled={isLoading}
-        >
-          <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-        </Button>
+    <main className="flex min-h-screen flex-col bg-gradient-to-br from-zinc-900 via-zinc-800 to-zinc-900 text-cream">
+      {/* Enhanced Header with Connection Status */}
+      <div className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-md border-b border-zinc-700/50">
+        {/* Connection Status Bar */}
+        <div className="px-4 py-2 border-b border-zinc-800/50">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-3">
+              {/* Database Status */}
+              <div className="flex items-center gap-1">
+                <Database className={`h-3 w-3 ${connectionStatus.isConfigured ? "text-green-400" : "text-red-400"}`} />
+                <span className={connectionStatus.isConfigured ? "text-green-400" : "text-red-400"}>
+                  {connectionStatus.isConfigured ? "Connected" : "Offline"}
+                </span>
+              </div>
+
+              {/* Real-time Status */}
+              <div className="flex items-center gap-1">
+                {connectionStatus.isRealtimeConnecting ? (
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+                  >
+                    <RefreshCw className="h-3 w-3 text-yellow-400" />
+                  </motion.div>
+                ) : connectionStatus.isRealtimeConnected ? (
+                  <Wifi className="h-3 w-3 text-blue-400" />
+                ) : (
+                  <WifiOff className="h-3 w-3 text-zinc-500" />
+                )}
+                <span
+                  className={
+                    connectionStatus.isRealtimeConnecting
+                      ? "text-yellow-400"
+                      : connectionStatus.isRealtimeConnected
+                        ? "text-blue-400"
+                        : "text-zinc-500"
+                  }
+                >
+                  {connectionStatus.isRealtimeConnecting
+                    ? "Connecting..."
+                    : connectionStatus.isRealtimeConnected
+                      ? "Live"
+                      : "Static"}
+                </span>
+              </div>
+
+              {/* Sample Data Indicator */}
+              {leaderboardData.isSampleData && (
+                <div className="flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3 text-yellow-400" />
+                  <span className="text-yellow-400">Sample Data</span>
+                </div>
+              )}
+
+              {/* Connection Details Toggle */}
+              <button
+                onClick={() => setShowConnectionDetails(!showConnectionDetails)}
+                className="text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Details
+              </button>
+            </div>
+
+            {/* Last Update */}
+            <div className="flex items-center gap-1 text-zinc-400">
+              <Clock className="h-3 w-3" />
+              <span>Updated {formatLastUpdate(connectionStatus.lastUpdate)}</span>
+            </div>
+          </div>
+
+          {/* Connection Details */}
+          <AnimatePresence>
+            {showConnectionDetails && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="mt-2 p-2 bg-zinc-800/50 rounded text-xs space-y-1"
+              >
+                <div>Database: {connectionStatus.isConfigured ? "✅ Ready" : "❌ Not configured"}</div>
+                <div>
+                  Real-time:{" "}
+                  {connectionStatus.isRealtimeConnecting
+                    ? "🔄 Connecting..."
+                    : connectionStatus.isRealtimeConnected
+                      ? "✅ Connected"
+                      : "❌ Disconnected"}
+                </div>
+                {connectionStatus.error && <div className="text-red-400">Error: {connectionStatus.error}</div>}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Main Header */}
+        <div className="flex items-center justify-between p-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => router.push("/")}
+            className="text-zinc-400 hover:text-cream hover:bg-zinc-800/50 h-10 w-10 rounded-full transition-all duration-200"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+
+          <h1 className="text-lg font-bold">Global Leaderboard</h1>
+
+          <div className="flex items-center gap-2">
+            {/* Force Reconnect Button */}
+            {!connectionStatus.isRealtimeConnected && connectionStatus.isConfigured && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleForceReconnect}
+                className="text-yellow-400 hover:text-yellow-300 hover:bg-zinc-800/50 h-10 w-10 rounded-full transition-all duration-200"
+                disabled={isRefreshing || connectionStatus.isRealtimeConnecting}
+                title="Force reconnect real-time"
+              >
+                <RotateCcw className={`h-5 w-5 ${isRefreshing ? "animate-spin" : ""}`} />
+              </Button>
+            )}
+
+            {/* Refresh Button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleRefresh}
+              className="text-zinc-400 hover:text-cream hover:bg-zinc-800/50 h-10 w-10 rounded-full transition-all duration-200"
+              disabled={isRefreshing}
+              title="Refresh leaderboard"
+            >
+              <RefreshCw className={`h-5 w-5 ${isRefreshing ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
+        </div>
       </div>
 
-      {/* Fallback Data Warning */}
-      {usingFallbackData && (
-        <div className="bg-yellow-500/20 text-yellow-400 text-center py-2 px-4 mx-auto rounded-full text-sm flex items-center justify-center gap-1 mb-2">
-          <AlertTriangle className="h-3 w-3" />
-          <span>Showing sample data. Connection to leaderboard failed.</span>
-        </div>
-      )}
+      {/* Recent Updates Notifications */}
+      <div className="px-4 py-2">
+        <AnimatePresence>
+          {recentUpdates.map((update, index) => (
+            <motion.div
+              key={`${update}-${index}`}
+              className="bg-green-500/20 text-green-400 text-center py-2 px-4 rounded-full text-sm flex items-center justify-center gap-2 mb-2"
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.95 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Zap className="h-4 w-4" />
+              <span>{update}</span>
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
-      {/* Recent Update Notification */}
-      <AnimatePresence>
-        {recentUpdate && (
-          <motion.div
-            className="bg-green-500/20 text-green-400 text-center py-2 px-4 mx-auto rounded-full text-sm"
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.3 }}
-          >
-            {recentUpdate}
-          </motion.div>
+        {/* Error Message */}
+        {connectionStatus.error && (
+          <div className="bg-red-500/20 text-red-400 text-center py-2 px-4 rounded-full text-sm mb-2 flex items-center justify-center gap-2">
+            <AlertTriangle className="h-4 w-4" />
+            <span>{connectionStatus.error}</span>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
 
       {/* Filter Buttons */}
-      <div className="mx-auto w-full max-w-md p-2 flex-1">
-        <div className="mb-3 flex justify-center gap-2">
+      <div className="mx-auto w-full max-w-md p-4 flex-1">
+        <div className="mb-6 flex justify-center gap-3">
           <Button
             variant={activeFilter === "score" ? "default" : "outline"}
             size="sm"
             onClick={() => setActiveFilter("score")}
-            className={`text-xs h-8 ${
-              activeFilter === "score" ? "bg-orange-500 hover:bg-orange-600" : "border-zinc-700"
+            className={`text-sm h-10 px-4 transition-all duration-200 ${
+              activeFilter === "score"
+                ? "bg-orange-500 hover:bg-orange-600 shadow-lg"
+                : "border-zinc-700 hover:bg-zinc-800/50"
             }`}
           >
-            <Trophy className="mr-1 h-3 w-3" />
-            Score
+            <Trophy className="mr-2 h-4 w-4" />
+            Score ({leaderboardData.byScore.length})
           </Button>
           <Button
             variant={activeFilter === "words" ? "default" : "outline"}
             size="sm"
             onClick={() => setActiveFilter("words")}
-            className={`text-xs h-8 ${
-              activeFilter === "words" ? "bg-green-500 hover:bg-green-600" : "border-zinc-700"
+            className={`text-sm h-10 px-4 transition-all duration-200 ${
+              activeFilter === "words"
+                ? "bg-green-500 hover:bg-green-600 shadow-lg"
+                : "border-zinc-700 hover:bg-zinc-800/50"
             }`}
           >
-            <Star className="mr-1 h-3 w-3" />
-            Words
+            <Star className="mr-2 h-4 w-4" />
+            Words ({leaderboardData.byWords.length})
           </Button>
         </div>
 
         {/* Content */}
-        {isLoading && !currentData.length ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="h-6 w-6 animate-spin rounded-full border-4 border-t-orange-500"></div>
-          </div>
-        ) : error && !usingFallbackData ? (
-          <div className="rounded-lg bg-zinc-800 p-6 text-center">
-            <p className="text-red-400 text-sm">{error}</p>
-            <Button
-              onClick={() => {
-                setRetryCount(0) // Reset retry count
-                fetchLeaderboard()
-              }}
-              className="mt-3 bg-orange-500 hover:bg-orange-600 rounded-xl text-xs h-8"
-            >
-              Retry
-            </Button>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <motion.div
+              className="h-8 w-8 rounded-full border-4 border-t-orange-500 border-r-transparent border-b-transparent border-l-transparent"
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+            />
           </div>
         ) : currentData.length === 0 ? (
-          <div className="rounded-lg bg-zinc-800 p-6 text-center">
-            <Trophy className="mx-auto mb-3 h-8 w-8 text-zinc-600" />
-            <h2 className="text-lg font-bold">No scores yet</h2>
-            <p className="mt-1 text-zinc-400 text-sm">Play a game to see your score on the leaderboard!</p>
+          <motion.div
+            className="rounded-2xl bg-gradient-to-br from-zinc-800/50 to-zinc-900/50 p-8 text-center border border-zinc-700/30"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.3 }}
+          >
+            <Trophy className="mx-auto mb-4 h-16 w-16 text-zinc-600" />
+            <h2 className="text-xl font-bold mb-2">No scores yet</h2>
+            <p className="text-zinc-400 text-base mb-4">Be the first to set a score on the leaderboard!</p>
             <Button
               onClick={() => router.push("/game")}
-              className="mt-4 bg-orange-500 hover:bg-orange-600 rounded-xl text-xs h-8"
+              className="bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 rounded-xl text-base h-12 px-8 shadow-lg"
             >
               Play Now
             </Button>
-          </div>
+          </motion.div>
         ) : (
-          <div className="space-y-2">
-            {currentData.map((item, index) => {
-              // Calculate the level based on word count
-              const calculatedLevel = calculateLevel(item.word_count)
-              const levelTitle = getLevelInfo(calculatedLevel).title
+          <div className="space-y-3">
+            <AnimatePresence mode="popLayout">
+              {currentData.map((item, index) => {
+                const levelInfo = getLevelInfo(item.level)
 
-              return (
-                <motion.div
-                  key={`${activeFilter}-${item.id}`}
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-zinc-800 to-zinc-900 p-2 shadow-md"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, delay: index * 0.03 }}
-                  layout
-                >
-                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 text-xs font-bold">
-                    {index === 0 ? (
-                      <Medal className="h-3 w-3 text-yellow-400" />
-                    ) : index === 1 ? (
-                      <Medal className="h-3 w-3 text-zinc-400" />
-                    ) : index === 2 ? (
-                      <Medal className="h-3 w-3 text-orange-400" />
-                    ) : (
-                      index + 1
-                    )}
-                  </div>
-
-                  <div className="flex-1">
-                    <div className="flex items-center gap-1">
-                      <User className="h-3 w-3 text-zinc-500" />
-                      <p className="font-medium text-sm">{item.nickname}</p>
+                return (
+                  <motion.div
+                    key={`${activeFilter}-${item.id}`}
+                    className="flex items-center gap-4 rounded-2xl bg-gradient-to-r from-zinc-800/50 via-zinc-700/30 to-zinc-800/50 p-4 shadow-lg border border-zinc-600/30 backdrop-blur-sm"
+                    initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -20, scale: 0.95 }}
+                    transition={{
+                      duration: 0.3,
+                      delay: index * 0.05,
+                      type: "spring",
+                      stiffness: 400,
+                      damping: 25,
+                    }}
+                    layout
+                    whileHover={{ scale: 1.02, y: -2 }}
+                  >
+                    {/* Rank */}
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-700/80 text-sm font-bold flex-shrink-0 border border-zinc-600/50">
+                      {index === 0 ? (
+                        <Medal className="h-5 w-5 text-yellow-400" />
+                      ) : index === 1 ? (
+                        <Medal className="h-5 w-5 text-zinc-300" />
+                      ) : index === 2 ? (
+                        <Medal className="h-5 w-5 text-orange-400" />
+                      ) : (
+                        index + 1
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-zinc-400">
-                      <p>{item.word_count} words</p>
-                    </div>
-                  </div>
 
-                  <div className="text-right">
-                    <p className="text-base font-bold text-orange-500">{item.score}</p>
-                    <p className="text-xs text-zinc-500">
-                      {levelTitle} (Lvl {calculatedLevel})
-                    </p>
-                  </div>
-                </motion.div>
-              )
-            })}
+                    {/* Player Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <User className="h-4 w-4 text-zinc-500 flex-shrink-0" />
+                        <p className="font-semibold text-base truncate">{item.nickname}</p>
+                      </div>
+                      <div className="flex items-center gap-3 text-sm text-zinc-400">
+                        <span>{item.word_count} words</span>
+                        <span>•</span>
+                        <span>
+                          {Math.floor(item.time_taken / 60)}:{(item.time_taken % 60).toString().padStart(2, "0")}
+                        </span>
+                        <span>•</span>
+                        <span className={levelInfo.color}>{levelInfo.title}</span>
+                      </div>
+                    </div>
+
+                    {/* Score */}
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-xl font-bold text-orange-400">{item.score.toLocaleString()}</p>
+                      <p className="text-sm text-zinc-500">Level {item.level}</p>
+                    </div>
+                  </motion.div>
+                )
+              })}
+            </AnimatePresence>
           </div>
         )}
       </div>
 
-      <div className="mt-auto">
-        <Footer />
-      </div>
+      <Footer />
     </main>
   )
 }

@@ -1,53 +1,140 @@
-import { createClient } from "@supabase/supabase-js"
+import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 
-// Create a single supabase client for the browser
-const createBrowserClient = () => {
-  try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-    if (!supabaseUrl) {
-      console.error("Missing NEXT_PUBLIC_SUPABASE_URL environment variable")
-      throw new Error(
-        "Supabase URL not found. If you're setting up this project, make sure to add NEXT_PUBLIC_SUPABASE_URL to your .env.local file.",
-      )
+// Database types for better type safety
+export interface Database {
+  public: {
+    Tables: {
+      players: {
+        Row: {
+          id: string
+          nickname: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          nickname: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          nickname?: string
+          created_at?: string
+        }
+      }
+      game_scores: {
+        Row: {
+          id: string
+          player_id: string
+          nickname: string
+          score: number
+          word_count: number
+          time_taken: number
+          main_word: string
+          level: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          player_id: string
+          nickname: string
+          score: number
+          word_count: number
+          time_taken: number
+          main_word: string
+          level: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          player_id?: string
+          nickname?: string
+          score?: number
+          word_count?: number
+          time_taken?: number
+          main_word?: string
+          level?: number
+          created_at?: string
+        }
+      }
     }
-
-    if (!supabaseAnonKey) {
-      console.error("Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable")
-      throw new Error(
-        "Supabase Anon Key not found. If you're setting up this project, make sure to add NEXT_PUBLIC_SUPABASE_ANON_KEY to your .env.local file.",
-      )
-    }
-
-    return createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-      },
-      realtime: {
-        params: {
-          eventsPerSecond: 10,
-        },
-      },
-      // Add global error handler
-      global: {
-        fetch: (...args) => {
-          return fetch(...args).catch((err) => {
-            console.error("Supabase fetch error:", err)
-            throw err
-          })
-        },
-      },
-    })
-  } catch (error) {
-    console.error("Error creating Supabase browser client:", error)
-    // Return a mock client that will gracefully fail
-    return createMockClient()
   }
 }
 
-// Create a mock client that will gracefully fail
+// Enhanced configuration validation
+const validateSupabaseConfig = (): { isValid: boolean; errors: string[] } => {
+  const errors: string[] = []
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl) {
+    errors.push("NEXT_PUBLIC_SUPABASE_URL is missing")
+  } else if (!supabaseUrl.includes("supabase.co") && !supabaseUrl.includes("localhost")) {
+    errors.push("NEXT_PUBLIC_SUPABASE_URL appears to be invalid")
+  }
+
+  if (!supabaseAnonKey) {
+    errors.push("NEXT_PUBLIC_SUPABASE_ANON_KEY is missing")
+  } else if (supabaseAnonKey.length < 100) {
+    errors.push("NEXT_PUBLIC_SUPABASE_ANON_KEY appears to be invalid")
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+  }
+}
+
+// Enhanced browser client with retry logic and error handling
+const createBrowserClient = (): SupabaseClient<Database> => {
+  const config = validateSupabaseConfig()
+
+  if (!config.isValid) {
+    console.error("Supabase configuration errors:", config.errors)
+    throw new Error(`Supabase configuration invalid: ${config.errors.join(", ")}`)
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+
+  return createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false, // We don't need auth sessions for this game
+      autoRefreshToken: false,
+    },
+    realtime: {
+      params: {
+        eventsPerSecond: 20, // Increased for better real-time performance
+      },
+    },
+    global: {
+      fetch: async (url, options = {}) => {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 10000) // 10s timeout
+
+        try {
+          const response = await fetch(url, {
+            ...options,
+            signal: controller.signal,
+          })
+          clearTimeout(timeoutId)
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+          }
+
+          return response
+        } catch (error) {
+          clearTimeout(timeoutId)
+          console.error("Supabase fetch error:", error)
+          throw error
+        }
+      },
+    },
+  })
+}
+
+// Mock client for fallback scenarios
 const createMockClient = () => {
   const mockResponse = {
     data: null,
@@ -61,10 +148,10 @@ const createMockClient = () => {
           limit: () => Promise.resolve(mockResponse),
           maybeSingle: () => Promise.resolve(mockResponse),
           single: () => Promise.resolve(mockResponse),
-          abortSignal: () => Promise.resolve(mockResponse),
         }),
         eq: () => ({
           maybeSingle: () => Promise.resolve(mockResponse),
+          single: () => Promise.resolve(mockResponse),
         }),
         insert: () => ({
           select: () => ({
@@ -74,9 +161,6 @@ const createMockClient = () => {
       }),
       insert: () => ({
         select: () => Promise.resolve(mockResponse),
-        upsert: () => ({
-          select: () => Promise.resolve(mockResponse),
-        }),
       }),
       upsert: () => ({
         select: () => Promise.resolve(mockResponse),
@@ -87,49 +171,87 @@ const createMockClient = () => {
         subscribe: () => Promise.resolve({ state: "subscribed" }),
       }),
       subscribe: () => Promise.resolve({ state: "subscribed" }),
+      send: () => Promise.resolve("ok"),
+      unsubscribe: () => Promise.resolve("ok"),
     }),
     removeChannel: () => Promise.resolve(),
-  }
+  } as any
 }
 
-// Singleton pattern to avoid multiple instances
-let browserClient: ReturnType<typeof createClient> | ReturnType<typeof createMockClient> | null = null
+// Singleton pattern with enhanced error handling
+let browserClient: SupabaseClient<Database> | ReturnType<typeof createMockClient> | null = null
+let clientInitializationError: Error | null = null
 
-export const getSupabaseBrowserClient = () => {
-  if (!browserClient) {
+export const getSupabaseBrowserClient = (): SupabaseClient<Database> | ReturnType<typeof createMockClient> => {
+  if (!browserClient && !clientInitializationError) {
     try {
       browserClient = createBrowserClient()
+      console.log("✅ Supabase client initialized successfully")
     } catch (error) {
-      console.error("Error initializing Supabase browser client:", error)
+      clientInitializationError = error as Error
+      console.error("❌ Failed to initialize Supabase client:", error)
       browserClient = createMockClient()
     }
   }
-  return browserClient
+
+  return browserClient!
 }
 
-// Server-side client (for server components and API routes)
+// Server-side client with enhanced configuration
 export const createServerClient = () => {
   try {
-    const supabaseUrl = process.env.SUPABASE_URL
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-    if (!supabaseUrl) {
-      console.error("Missing SUPABASE_URL environment variable")
-      throw new Error(
-        "Supabase URL not found. If you're setting up this project, make sure to add SUPABASE_URL to your .env.local file.",
-      )
+    if (!supabaseUrl || !supabaseServiceKey) {
+      throw new Error("Missing server-side Supabase configuration")
     }
 
-    if (!supabaseServiceKey) {
-      console.error("Missing SUPABASE_SERVICE_ROLE_KEY environment variable")
-      throw new Error(
-        "Supabase Service Role Key not found. If you're setting up this project, make sure to add SUPABASE_SERVICE_ROLE_KEY to your .env.local file.",
-      )
-    }
-
-    return createClient(supabaseUrl, supabaseServiceKey)
+    return createClient<Database>(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    })
   } catch (error) {
     console.error("Error creating Supabase server client:", error)
     return createMockClient()
+  }
+}
+
+// Enhanced configuration check
+export const isSupabaseConfigured = (): boolean => {
+  const config = validateSupabaseConfig()
+  return config.isValid && !clientInitializationError
+}
+
+// Get configuration status for debugging
+export const getSupabaseStatus = () => {
+  const config = validateSupabaseConfig()
+  return {
+    isConfigured: config.isValid,
+    errors: config.errors,
+    initializationError: clientInitializationError?.message,
+    hasClient: !!browserClient,
+  }
+}
+
+// Test connection utility
+export const testSupabaseConnection = async (): Promise<{ success: boolean; error?: string }> => {
+  try {
+    if (!isSupabaseConfigured()) {
+      return { success: false, error: "Supabase not configured" }
+    }
+
+    const client = getSupabaseBrowserClient()
+    const { data, error } = await client.from("players").select("id").limit(1)
+
+    if (error) {
+      return { success: false, error: error.message }
+    }
+
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: (error as Error).message }
   }
 }
