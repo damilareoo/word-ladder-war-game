@@ -150,7 +150,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 Now, let's create an `.env.example` file to help people set up their environment variables:
 
-```plaintext file=".env.example"
+\`\`\`plaintext file=".env.example"
 # Supabase Configuration
 # Replace these with your own values from your Supabase project
 

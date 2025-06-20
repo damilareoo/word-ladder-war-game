@@ -33,15 +33,18 @@ export function calculateScore(words: string[]): number {
   return score
 }
 
-// Calculate level based on word count
+// Make sure the level calculation is correct
 export function calculateLevel(wordCount: number): number {
   console.log("Calculating level for word count:", wordCount)
+
+  // Ensure wordCount is treated as a number
+  const count = typeof wordCount === "number" ? wordCount : Number.parseInt(String(wordCount), 10)
   let level = 1
 
   // Updated thresholds as requested
-  if (wordCount <= 20) {
+  if (count <= 10) {
     level = 1
-  } else if (wordCount <= 30) {
+  } else if (count <= 20) {
     level = 2
   } else {
     level = 3
