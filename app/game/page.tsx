@@ -10,20 +10,15 @@ import { calculateScore, calculateLevel } from "@/lib/game-utils"
 import { motion, AnimatePresence } from "framer-motion"
 import { getSupabaseBrowserClient } from "@/lib/supabase"
 import { Footer } from "@/components/footer"
-import { LetterTile, SelectedLetter } from "@/components/letter-tile"
+import { LetterTile } from "@/components/letter-tile"
 import { refreshLeaderboard } from "@/lib/realtime-utils"
 import { trackGameStart, trackGameComplete, trackWordSubmitted } from "@/lib/analytics"
-
-// Prevent prerendering of this page
-export const dynamic = "force-dynamic"
-export const dynamicParams = true
 
 // Game duration in seconds
 const GAME_DURATION = 120
 
 // Memoized components for better performance
 const MemoizedLetterTile = memo(LetterTile)
-const MemoizedSelectedLetter = memo(SelectedLetter)
 
 // Memoized motion components
 const MotionHeader = memo(({ children, ...props }: any) => <motion.header {...props}>{children}</motion.header>)
@@ -43,104 +38,18 @@ export default function GamePage() {
   )
 
   // New state for letter tile gameplay
-  const [letters, setLetters] = useState<Array<{ letter: string; visible: boolean }>>([])
-  const [selectedLetters, setSelectedLetters] = useState<Array<{ letter: string; index: number }>>([])
-
-  // Refs for touch handling
-  const lastTouchTimeRef = useRef<number>(0)
-  const touchCooldownRef = useRef<boolean>(false)
-  const processingSubmissionRef = useRef<boolean>(false)
+  const [letters, setLetters] = useState<string[]>([])
+  const [selectedLetters, setSelectedLetters] = useState<string[]>([])
+  const [selectedIndices, setSelectedIndices] = useState<number[]>([])
+  const [touchStartTime, setTouchStartTime] = useState<number | null>(null)
 
   const wordListRef = useRef<HTMLDivElement>(null)
   const startTimeRef = useRef<number | null>(null)
   const validWordsRef = useRef<string[]>([])
   const gameDataSavedRef = useRef<boolean>(false)
-  const timerRef = useRef<any>(null)
-  const endGameTimeoutRef = useRef<any>(null)
-  const supabaseRef = useRef<any>(null)
-  const mainWordRef = useRef<string>("")
-
-  // Clear current selection and return all selected letters to the pool
-  const clearSelection = useCallback(() => {
-    // Make all selected letters visible again
-    setLetters((prev) => {
-      const newLetters = [...prev]
-      selectedLetters.forEach(({ index }) => {
-        newLetters[index].visible = true
-      })
-      return newLetters
-    })
-
-    // Clear selected letters
-    setSelectedLetters([])
-  }, [selectedLetters])
-
-  // Start game when user interacts
-  const startGame = useCallback(() => {
-    if (!gameStarted && !gameEnded) {
-      console.log("Game started")
-      setGameStarted(true)
-
-      // Track game start after a small delay to ensure analytics is loaded
-      if (typeof window !== "undefined") {
-        setTimeout(() => {
-          trackGameStart(mainWordRef.current)
-        }, 100)
-      }
-    }
-  }, [gameStarted, gameEnded])
-
-  // Save game data to Supabase
-  const saveGameData = useCallback(async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
-    if (!supabaseRef.current) return false
-
-    const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
-    const playerId = localStorage.getItem("wlw-player-id")
-
-    if (!nickname || !playerId) {
-      console.error("Missing player information")
-      return false
-    }
-
-    try {
-      // Game data to save
-      const gameData = {
-        player_id: playerId,
-        nickname,
-        score: finalScore,
-        word_count: wordCount,
-        time_taken: timeTaken,
-        main_word: mainWordRef.current,
-        level: level,
-      }
-
-      console.log("Saving game data to Supabase:", gameData)
-
-      // Use upsert to ensure data is saved even if there's a conflict
-      const { data, error } = await supabaseRef.current.from("game_scores").upsert(gameData).select()
-
-      if (error) {
-        console.error("Error saving to Supabase:", error)
-        return false
-      }
-
-      console.log("Successfully saved to Supabase:", data)
-
-      // Trigger a leaderboard refresh with immediate broadcast
-      await refreshLeaderboard({
-        score: finalScore,
-        nickname,
-        wordCount,
-        level,
-        immediate: true,
-      })
-
-      return true
-    } catch (error) {
-      console.error("Error saving score:", error)
-      return false
-    }
-  }, [])
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const endGameTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const supabase = useRef(getSupabaseBrowserClient()).current
 
   // End game and calculate final score
   const endGame = useCallback(async () => {
@@ -168,13 +77,8 @@ export default function GamePage() {
     const wordCount = currentValidWords.length
     const level = calculateLevel(wordCount)
 
-    // Log level information for debugging
-    console.log(`Game ended with ${wordCount} words, calculated level: ${level}`)
-
     // Track game completion
-    if (typeof window !== "undefined") {
-      trackGameComplete(finalScore, wordCount, level)
-    }
+    trackGameComplete(finalScore, wordCount, level)
 
     console.log("Game summary:", {
       score: finalScore,
@@ -184,17 +88,15 @@ export default function GamePage() {
     })
 
     // Store the game results in localStorage immediately
-    if (typeof window !== "undefined") {
-      localStorage.setItem("wlw-last-score", finalScore.toString())
-      localStorage.setItem("wlw-last-word-count", wordCount.toString())
-      localStorage.setItem("wlw-last-level", level.toString())
-      localStorage.setItem("wlw-last-time", timeTaken.toString())
-      localStorage.setItem("wlw-game-timestamp", Date.now().toString())
-    }
+    localStorage.setItem("wlw-last-score", finalScore.toString())
+    localStorage.setItem("wlw-last-word-count", wordCount.toString())
+    localStorage.setItem("wlw-last-level", level.toString())
+    localStorage.setItem("wlw-last-time", timeTaken.toString())
+    localStorage.setItem("wlw-game-timestamp", Date.now().toString())
 
     // Save game data to Supabase in the background
     saveGameData(finalScore, wordCount, level, timeTaken).then((success) => {
-      if (!success && typeof window !== "undefined") {
+      if (!success) {
         console.log("Failed to save to Supabase, will retry on results page")
         localStorage.setItem("wlw-retry-save", "true")
       }
@@ -213,19 +115,12 @@ export default function GamePage() {
 
   // Initialize game with optimized loading
   useEffect(() => {
-    // Initialize Supabase client
-    if (typeof window !== "undefined") {
-      supabaseRef.current = getSupabaseBrowserClient()
-    }
-
     const initGame = async () => {
       // Check if user has a nickname
-      if (typeof window !== "undefined") {
-        const nickname = localStorage.getItem("wlw-nickname")
-        if (!nickname) {
-          router.push("/nickname")
-          return
-        }
+      const nickname = localStorage.getItem("wlw-nickname")
+      if (!nickname) {
+        router.push("/nickname")
+        return
       }
 
       try {
@@ -233,22 +128,13 @@ export default function GamePage() {
         const randomIndex = Math.floor(Math.random() * wordList.length)
         const selectedWord = wordList[randomIndex].word.toUpperCase()
         setMainWord(selectedWord)
-        mainWordRef.current = selectedWord
 
-        // Shuffle the letters of the main word and set them as visible
-        const shuffledLetters = [...selectedWord]
-          .map((letter) => ({
-            letter,
-            visible: true,
-          }))
-          .sort(() => Math.random() - 0.5)
-
+        // Shuffle the letters of the main word
+        const shuffledLetters = [...selectedWord].sort(() => Math.random() - 0.5)
         setLetters(shuffledLetters)
 
         // Store the main word in localStorage for reference
-        if (typeof window !== "undefined") {
-          localStorage.setItem("wlw-main-word", selectedWord)
-        }
+        localStorage.setItem("wlw-main-word", selectedWord)
 
         // Get definition for the main word
         const definition = await getWordDefinition(selectedWord)
@@ -263,6 +149,10 @@ export default function GamePage() {
 
     initGame()
 
+    // Add event listeners for better mobile performance
+    document.addEventListener("touchstart", handleTouchStart)
+    document.addEventListener("touchend", handleTouchEnd)
+
     // Cleanup function
     return () => {
       if (timerRef.current) {
@@ -271,12 +161,26 @@ export default function GamePage() {
       if (endGameTimeoutRef.current) {
         clearTimeout(endGameTimeoutRef.current)
       }
+      document.removeEventListener("touchstart", handleTouchStart)
+      document.removeEventListener("touchend", handleTouchEnd)
     }
   }, [router])
 
+  // Touch event handlers for better mobile performance
+  const handleTouchStart = useCallback(() => {
+    setTouchStartTime(Date.now())
+  }, [])
+
+  const handleTouchEnd = useCallback(() => {
+    if (touchStartTime && Date.now() - touchStartTime < 300) {
+      // This was a quick tap, no need to do anything special
+    }
+    setTouchStartTime(null)
+  }, [touchStartTime])
+
   // Timer logic with optimized interval
   useEffect(() => {
-    if (!gameStarted || gameEnded || isLoading || typeof window === "undefined") return
+    if (!gameStarted || gameEnded || isLoading) return
 
     if (startTimeRef.current === null) {
       startTimeRef.current = Date.now()
@@ -287,26 +191,47 @@ export default function GamePage() {
       clearInterval(timerRef.current)
     }
 
-    timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          if (timerRef.current) {
-            clearInterval(timerRef.current)
+    // Use requestAnimationFrame for smoother timer updates
+    let lastUpdateTime = Date.now()
+    const updateTimer = () => {
+      const now = Date.now()
+      if (now - lastUpdateTime >= 1000) {
+        lastUpdateTime = now
+        setTimeLeft((prev) => {
+          if (prev <= 1) {
+            endGame()
+            return 0
           }
-          // End game immediately when timer reaches 0
-          endGame()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
+          return prev - 1
+        })
+      }
+
+      if (!gameEnded) {
+        timerRef.current = requestAnimationFrame(updateTimer) as unknown as NodeJS.Timeout
+      }
+    }
+
+    timerRef.current = requestAnimationFrame(updateTimer) as unknown as NodeJS.Timeout
 
     return () => {
       if (timerRef.current) {
-        clearInterval(timerRef.current)
+        cancelAnimationFrame(timerRef.current as unknown as number)
       }
     }
   }, [gameStarted, gameEnded, isLoading, endGame])
+
+  // Start game when user interacts
+  const startGame = useCallback(() => {
+    if (!gameStarted && !gameEnded) {
+      console.log("Game started")
+      setGameStarted(true)
+
+      // Track game start after a small delay to ensure analytics is loaded
+      setTimeout(() => {
+        trackGameStart(mainWord)
+      }, 100)
+    }
+  }, [gameStarted, gameEnded, mainWord])
 
   // Update score whenever validWords changes
   useEffect(() => {
@@ -316,203 +241,185 @@ export default function GamePage() {
     }
   }, [validWords])
 
-  // Handle letter selection with improved touch handling for mobile
+  // Save game data to Supabase
+  const saveGameData = useCallback(
+    async (finalScore: number, wordCount: number, level: number, timeTaken: number) => {
+      const nickname = localStorage.getItem("wlw-nickname") || "Anonymous"
+      const playerId = localStorage.getItem("wlw-player-id")
+
+      if (!nickname || !playerId) {
+        console.error("Missing player information")
+        return false
+      }
+
+      try {
+        // Game data to save
+        const gameData = {
+          player_id: playerId,
+          nickname,
+          score: finalScore,
+          word_count: wordCount,
+          time_taken: timeTaken,
+          main_word: mainWord,
+          level: level,
+        }
+
+        console.log("Saving game data to Supabase:", gameData)
+
+        // Use upsert to ensure data is saved even if there's a conflict
+        const { data, error } = await supabase.from("game_scores").upsert(gameData).select()
+
+        if (error) {
+          console.error("Error saving to Supabase:", error)
+          return false
+        }
+
+        console.log("Successfully saved to Supabase:", data)
+
+        // Trigger a leaderboard refresh
+        await refreshLeaderboard({
+          score: finalScore,
+          nickname,
+          wordCount,
+          level,
+        })
+
+        return true
+      } catch (error) {
+        console.error("Error saving score:", error)
+        return false
+      }
+    },
+    [mainWord, supabase],
+  )
+
+  // Handle letter selection with debounce for better mobile performance
   const handleLetterClick = useCallback(
     (letter: string, index: number) => {
-      // Prevent interaction if game has ended
-      if (gameEnded) return
-
-      // Start game if not started
       if (!gameStarted) {
         startGame()
       }
 
-      // Implement touch cooldown to prevent accidental double taps
-      if (touchCooldownRef.current) {
+      if (gameEnded) return
+
+      // Debounce to prevent double-taps on mobile
+      const now = Date.now()
+      if (touchStartTime && now - touchStartTime < 50) {
         return
       }
 
-      // Set cooldown flag
-      touchCooldownRef.current = true
-
-      // Add letter to selection and hide it from the available letters
-      setSelectedLetters((prev) => [...prev, { letter, index }])
-
-      // Update the letters array to mark this letter as not visible
-      setLetters((prev) => {
-        const newLetters = [...prev]
-        newLetters[index].visible = false
-        return newLetters
-      })
-
-      // Reset cooldown after a short delay
-      setTimeout(() => {
-        touchCooldownRef.current = false
-      }, 100)
+      setSelectedLetters((prev) => [...prev, letter])
+      setSelectedIndices((prev) => [...prev, index])
     },
-    [gameStarted, gameEnded, startGame],
+    [gameStarted, gameEnded, startGame, touchStartTime],
   )
 
-  // Handle letter removal with improved touch handling
-  const handleSelectedLetterClick = useCallback(
-    (selectedIndex: number) => {
-      // Prevent interaction during cooldown
-      if (touchCooldownRef.current) {
-        return
-      }
+  // Handle letter removal
+  const handleSelectedLetterClick = useCallback((index: number) => {
+    setSelectedLetters((prev) => {
+      const newSelectedLetters = [...prev]
+      newSelectedLetters.splice(index, 1)
+      return newSelectedLetters
+    })
 
-      // Set cooldown flag
-      touchCooldownRef.current = true
+    setSelectedIndices((prev) => {
+      const newSelectedIndices = [...prev]
+      newSelectedIndices.splice(index, 1)
+      return newSelectedIndices
+    })
+  }, [])
 
-      // Get the letter that was clicked
-      const removedLetter = selectedLetters[selectedIndex]
-
-      // Remove the letter from selected letters
-      setSelectedLetters((prev) => prev.filter((_, i) => i !== selectedIndex))
-
-      // Make the letter visible again in the original letters array
-      setLetters((prev) => {
-        const newLetters = [...prev]
-        newLetters[removedLetter.index].visible = true
-        return newLetters
-      })
-
-      // Reset cooldown after a short delay
-      setTimeout(() => {
-        touchCooldownRef.current = false
-      }, 100)
-    },
-    [selectedLetters],
-  )
-
-  // Handle word submission with optimized validation and immediate feedback
+  // Handle word submission with optimized validation
   const handleSubmitWord = useCallback(async () => {
-    // Prevent multiple submissions at once
-    if (processingSubmissionRef.current) {
-      return
-    }
-
-    processingSubmissionRef.current = true
-
     if (!gameStarted) {
       startGame()
-      processingSubmissionRef.current = false
       return
     }
 
-    if (gameEnded || selectedLetters.length === 0) {
-      processingSubmissionRef.current = false
-      return
-    }
+    if (gameEnded || selectedLetters.length === 0) return
 
-    const word = selectedLetters.map((item) => item.letter).join("")
+    const word = selectedLetters.join("")
     console.log("Submitting word:", word)
 
-    try {
-      // Check if word is at least 3 letters
-      if (word.length < 3) {
-        console.log("Word too short:", word)
-        // Immediately show as invalid
-        setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
+    // Check if word is at least 3 letters
+    if (word.length < 3) {
+      console.log("Word too short:", word)
+      setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
+      setSelectedLetters([])
+      setSelectedIndices([])
 
-        // Track invalid word submission
-        if (typeof window !== "undefined") {
-          trackWordSubmitted(word, false)
-        }
+      // Track invalid word submission
+      trackWordSubmitted(word, false)
+      return
+    }
 
-        // Return letters to the pool
-        clearSelection()
-        processingSubmissionRef.current = false
-        return
-      }
+    // Check if word has already been submitted
+    if (validWords.includes(word)) {
+      console.log("Word already submitted:", word)
+      setSubmittedWords((prev) => [...prev, { word, status: "duplicate" }])
+      setSelectedLetters([])
+      setSelectedIndices([])
 
-      // Check if word has already been submitted
-      if (validWords.includes(word)) {
-        console.log("Word already submitted:", word)
-        // Immediately show as duplicate
-        setSubmittedWords((prev) => [...prev, { word, status: "duplicate" }])
+      // Track duplicate word submission
+      trackWordSubmitted(word, false)
+      return
+    }
 
-        // Track duplicate word submission
-        if (typeof window !== "undefined") {
-          trackWordSubmitted(word, false)
-        }
+    // Show loading state for better UX
+    setSubmittedWords((prev) => [...prev, { word, status: "invalid" }])
 
-        // Return letters to the pool
-        clearSelection()
-        processingSubmissionRef.current = false
-        return
-      }
+    // Check if it's a valid English word using the dictionary API
+    console.log("Checking if word is valid:", word)
+    const isValid = await isValidEnglishWord(word)
 
-      // Optimistically assume the word is valid for immediate feedback
-      // Add to submitted words with "valid" status right away
-      setSubmittedWords((prev) => [...prev, { word, status: "valid" }])
+    if (isValid) {
+      console.log("Word is valid:", word)
+      const newValidWords = [...validWords, word]
+      setValidWords(newValidWords)
 
-      // Check if it's a valid English word using the dictionary API
-      console.log("Checking if word is valid:", word)
-      const isValid = await isValidEnglishWord(word)
-
-      if (isValid) {
-        console.log("Word is valid:", word)
-        const newValidWords = [...validWords, word]
-        setValidWords(newValidWords)
-
-        // Calculate and update score
-        const newScore = calculateScore(newValidWords)
-        console.log("New score after adding word:", newScore)
-        setScore(newScore)
-
-        // Track valid word submission
-        if (typeof window !== "undefined") {
-          trackWordSubmitted(word, true)
-        }
-      } else {
-        // If the word is actually invalid, update the status
-        console.log("Word is invalid:", word)
-        setSubmittedWords((prev) => {
-          const updated = [...prev]
-          const lastIndex = updated.length - 1
-          if (updated[lastIndex]?.word === word) {
-            updated[lastIndex] = { word, status: "invalid" }
-          }
-          return updated
-        })
-
-        // Track invalid word submission
-        if (typeof window !== "undefined") {
-          trackWordSubmitted(word, false)
-        }
-      }
-    } catch (error) {
-      console.error("Error validating word:", error)
-      // If there's an error, mark as invalid
+      // Update the last submitted word status
       setSubmittedWords((prev) => {
         const updated = [...prev]
-        const lastIndex = updated.length - 1
-        if (updated[lastIndex]?.word === word) {
-          updated[lastIndex] = { word, status: "invalid" }
-        }
+        updated[updated.length - 1] = { word, status: "valid" }
         return updated
       })
-    } finally {
-      // Clear the selected letters and return them to the pool
-      clearSelection()
 
-      // Scroll to bottom of word list with smooth animation
-      if (wordListRef.current) {
-        setTimeout(() => {
-          if (wordListRef.current) {
-            wordListRef.current.scrollTo({
-              top: wordListRef.current.scrollHeight,
-              behavior: "smooth",
-            })
-          }
-        }, 50)
-      }
+      // Calculate and update score
+      const newScore = calculateScore(newValidWords)
+      console.log("New score after adding word:", newScore)
+      setScore(newScore)
 
-      // Reset processing flag
-      processingSubmissionRef.current = false
+      // Track valid word submission
+      trackWordSubmitted(word, true)
+    } else {
+      // Word is already marked as invalid in the loading state
+      console.log("Word is invalid:", word)
+
+      // Track invalid word submission
+      trackWordSubmitted(word, false)
     }
-  }, [gameStarted, gameEnded, selectedLetters, validWords, startGame, clearSelection])
+
+    setSelectedLetters([])
+    setSelectedIndices([])
+
+    // Scroll to bottom of word list with smooth animation
+    if (wordListRef.current) {
+      setTimeout(() => {
+        if (wordListRef.current) {
+          wordListRef.current.scrollTo({
+            top: wordListRef.current.scrollHeight,
+            behavior: "smooth",
+          })
+        }
+      }, 50)
+    }
+  }, [gameStarted, gameEnded, selectedLetters, validWords, startGame])
+
+  // Clear current selection
+  const clearSelection = useCallback(() => {
+    setSelectedLetters([])
+    setSelectedIndices([])
+  }, [])
 
   // Format time as MM:SS
   const formatTime = useCallback((seconds: number) => {
@@ -523,32 +430,16 @@ export default function GamePage() {
 
   // Memoize the letter tiles to prevent unnecessary re-renders
   const letterTiles = useMemo(() => {
-    return letters
-      .map(
-        (item, index) =>
-          item.visible && (
-            <MemoizedLetterTile
-              key={`letter-${index}`}
-              letter={item.letter}
-              onClick={() => handleLetterClick(item.letter, index)}
-              position={index}
-            />
-          ),
-      )
-      .filter(Boolean) // Filter out null/undefined values (hidden letters)
-  }, [letters, handleLetterClick])
-
-  // Memoize the selected letter tiles
-  const selectedLetterTiles = useMemo(() => {
-    return selectedLetters.map((item, index) => (
-      <MemoizedSelectedLetter
-        key={`selected-${index}`}
-        letter={item.letter}
-        onClick={() => handleSelectedLetterClick(index)}
-        index={index}
+    return letters.map((letter, index) => (
+      <MemoizedLetterTile
+        key={`letter-${index}`}
+        letter={letter}
+        onClick={() => handleLetterClick(letter, index)}
+        isSelected={selectedIndices.includes(index)}
+        position={index}
       />
     ))
-  }, [selectedLetters, handleSelectedLetterClick])
+  }, [letters, selectedIndices, handleLetterClick])
 
   if (isLoading) {
     return (
@@ -665,58 +556,61 @@ export default function GamePage() {
       </div>
 
       {/* Selected Letters and Submit Button - Optimized for mobile */}
-      <div className="p-3">
-        <div className="flex flex-col gap-3">
-          {/* Selected Letters Area */}
-          <div className="min-h-14 p-2 bg-zinc-800/50 rounded-xl flex flex-wrap gap-2 items-center">
-            <AnimatePresence>
-              {selectedLetters.length > 0 ? (
-                selectedLetterTiles
-              ) : (
-                <motion.p
-                  className="text-zinc-500 text-sm w-full text-center"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+      <div className="p-2">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <div className="flex flex-wrap gap-1 min-h-8">
+              {selectedLetters.map((letter, index) => (
+                <motion.div
+                  key={`selected-${index}`}
+                  className="w-8 h-8 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-md flex items-center justify-center text-base font-bold cursor-pointer shadow-md touch-manipulation"
+                  onClick={() => handleSelectedLetterClick(index)}
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  style={{
+                    WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
+                  }}
                 >
-                  Select letters to form a word
-                </motion.p>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex justify-between gap-2">
-            <Button
-              variant="outline"
-              onClick={clearSelection}
-              className="flex-1 h-10 text-zinc-400 border-zinc-700 text-sm touch-manipulation"
-              disabled={selectedLetters.length === 0}
-              style={{
-                WebkitTapHighlightColor: "transparent",
-              }}
-            >
-              <X className="h-4 w-4 mr-1" />
-              Clear
-            </Button>
-            <Button
-              onClick={handleSubmitWord}
-              className="flex-1 h-10 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-md text-sm touch-manipulation"
-              disabled={selectedLetters.length < 3 || processingSubmissionRef.current}
-              style={{
-                WebkitTapHighlightColor: "transparent",
-              }}
-            >
-              <Send className="h-4 w-4 mr-1" />
-              Submit
-            </Button>
+                  {letter}
+                </motion.div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={clearSelection}
+                className="h-8 text-zinc-400 border-zinc-700 text-xs touch-manipulation"
+                disabled={selectedLetters.length === 0}
+                style={{
+                  WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
+                }}
+              >
+                <X className="h-3 w-3 mr-1" />
+                Clear
+              </Button>
+              <Button
+                onClick={handleSubmitWord}
+                size="sm"
+                className="h-8 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 shadow-md text-xs touch-manipulation"
+                disabled={selectedLetters.length < 3}
+                style={{
+                  WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
+                }}
+              >
+                <Send className="h-3 w-3 mr-1" />
+                Enter
+              </Button>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Letter Tiles - Improved spacing and touch response for mobile */}
-      <div className="p-3 pt-1 pb-6 mb-6">
-        <div className="flex flex-wrap justify-center gap-3 touch-manipulation">{letterTiles}</div>
+      <div className="p-2 pt-1 pb-6 mb-6">
+        <div className="flex flex-wrap justify-center gap-2 touch-manipulation">{letterTiles}</div>
       </div>
 
       {/* Footer with proper spacing */}

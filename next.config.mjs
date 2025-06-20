@@ -10,12 +10,7 @@ const nextConfig = {
     domains: ['localhost', 'word-ladder-war.vercel.app'],
     unoptimized: true,
   },
-  // Add configuration for handling client-only pages
-  experimental: {
-    serverActions: {
-      allowedOrigins: ['localhost:3000', 'word-ladder-war.vercel.app'],
-    },
-  },
+  // Remove environment variable dependency
 };
 
 export default nextConfig;
