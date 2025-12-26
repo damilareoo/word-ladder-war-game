@@ -3,82 +3,94 @@
 @tailwind utilities;
 
 :root {
-  --background: 0 0% 3.9%;
-  --foreground: 0 0% 98%;
+  --background: 0 0% 6%;
+  --foreground: 48 20% 92%;
 
-  --card: 0 0% 3.9%;
-  --card-foreground: 0 0% 98%;
+  --card: 0 0% 9%;
+  --card-foreground: 48 20% 92%;
 
-  --popover: 0 0% 3.9%;
-  --popover-foreground: 0 0% 98%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 48 20% 92%;
 
-  --primary: 20 100% 50%;
-  --primary-foreground: 0 0% 98%;
+  --primary: 14 100% 55%;
+  --primary-foreground: 0 0% 100%;
 
-  --secondary: 160 84% 39%;
-  --secondary-foreground: 0 0% 98%;
+  --secondary: 142 50% 45%;
+  --secondary-foreground: 0 0% 100%;
 
-  --muted: 0 0% 14.9%;
-  --muted-foreground: 0 0% 63.9%;
+  --muted: 0 0% 14%;
+  --muted-foreground: 0 0% 55%;
 
-  --accent: 0 0% 14.9%;
-  --accent-foreground: 0 0% 98%;
+  --accent: 0 0% 14%;
+  --accent-foreground: 48 20% 92%;
 
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
+  --destructive: 0 70% 50%;
+  --destructive-foreground: 0 0% 100%;
 
-  --border: 0 0% 14.9%;
-  --input: 0 0% 14.9%;
-  --ring: 0 0% 83.1%;
+  --border: 0 0% 16%;
+  --input: 0 0% 16%;
+  --ring: 14 100% 55%;
 
-  --radius: 0.8rem;
+  --radius: 0.75rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  height: -webkit-fill-available;
 }
 
 body {
-  @apply bg-background text-foreground;
+  @apply bg-background text-foreground antialiased;
   font-feature-settings: "rlig" 1, "calt" 1;
-  touch-action: manipulation; /* Improve touch response */
-  -webkit-tap-highlight-color: transparent; /* Remove tap highlight on mobile */
-  overscroll-behavior: none; /* Prevent pull-to-refresh on mobile */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  line-height: 1.5;
+  min-height: 100%;
+  min-height: -webkit-fill-available;
 }
 
-/* Custom colors */
+/* Typography */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  @apply font-semibold tracking-tight;
+  line-height: 1.15;
+}
+
+/* Tabular numbers for scores/timers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom text color */
 .text-cream {
-  color: #f5f5dc;
+  color: hsl(48, 20%, 92%);
 }
 
-/* Animations */
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-}
-
-.animate-pulse {
-  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-/* Scrollbar styling */
+/* Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 4px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e1e1e;
-  border-radius: 10px;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
-  border-radius: 10px;
+  background: hsl(0 0% 20%);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: hsl(0 0% 30%);
 }
 
 /* Mobile optimizations */
@@ -86,70 +98,44 @@ body {
   touch-action: manipulation;
 }
 
-/* Prevent text selection on game elements */
 .select-none {
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* Improve scrolling on mobile */
 .overscroll-contain {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
 
-/* Prevent pull-to-refresh on mobile */
 .overscroll-none {
   overscroll-behavior: none;
 }
 
-/* Enhanced touch targets for mobile */
-@media (max-width: 640px) {
-  .touch-target {
-    min-height: 44px;
-    min-width: 44px;
-  }
+/* Focus states */
+:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
 }
 
-/* Letter tile animations */
-@keyframes selectLetter {
-  0% {
-    transform: scale(1);
+/* Smooth transitions */
+.transition-colors {
+  transition-property: color, background-color, border-color;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* Animation for low time warning */
+@keyframes pulse-warning {
+  0%,
+  100% {
     opacity: 1;
   }
   50% {
-    transform: scale(0.9);
-  }
-  100% {
-    transform: scale(0);
-    opacity: 0;
+    opacity: 0.6;
   }
 }
 
-.letter-selected {
-  animation: selectLetter 0.2s forwards;
-}
-
-@keyframes appearLetter {
-  0% {
-    transform: scale(0);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-.letter-appear {
-  animation: appearLetter 0.2s forwards;
-}
-
-/* Selected letter area styling */
-.selected-letters-area {
-  min-height: 60px;
-  background: rgba(39, 39, 42, 0.4);
-  backdrop-filter: blur(4px);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+.animate-pulse-warning {
+  animation: pulse-warning 0.5s ease-in-out infinite;
 }

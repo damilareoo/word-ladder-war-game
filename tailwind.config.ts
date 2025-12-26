@@ -19,6 +19,10 @@ const config = {
       },
     },
     extend: {
+      fontFamily: {
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+        mono: ["var(--font-mono)", "monospace"],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -52,19 +56,6 @@ const config = {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
-        },
-        cream: "#f5f5dc",
-        orange: {
-          500: "#ff5722",
-          600: "#e64a19",
-        },
-        green: {
-          500: "#4caf50",
-          600: "#388e3c",
-        },
-        blue: {
-          500: "#2196f3",
-          600: "#1976d2",
         },
       },
       borderRadius: {

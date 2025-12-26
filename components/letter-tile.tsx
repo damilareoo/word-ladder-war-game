@@ -10,51 +10,44 @@ interface LetterTileProps {
   position?: number
 }
 
-// Optimized letter tile component with memoization
 export const LetterTile = memo(function LetterTile({ letter, onClick, isSelected = false, position }: LetterTileProps) {
-  // Use useCallback to prevent unnecessary re-renders
   const handleClick = useCallback(() => {
     onClick()
   }, [onClick])
 
-  // Simplified animation for better performance on mobile
-  const animationProps = {
-    initial: position !== undefined ? { y: 5, opacity: 0 } : undefined,
-    animate: position !== undefined ? { y: 0, opacity: 1 } : undefined,
-    transition: {
-      delay: position !== undefined ? position * 0.02 : 0, // Reduced delay for faster appearance
-      type: "spring",
-      stiffness: 400,
-      damping: 20,
-    },
-  }
-
   return (
-    <motion.div
-      className="relative w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center text-xl font-bold rounded-lg cursor-pointer select-none touch-manipulation"
-      whileTap={{ scale: 0.95 }}
+    <motion.button
+      className="relative w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center rounded-2xl cursor-pointer select-none touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-95 transition-transform"
+      whileTap={{ scale: 0.92 }}
       onClick={handleClick}
-      {...animationProps}
+      initial={position !== undefined ? { y: 8, opacity: 0 } : undefined}
+      animate={position !== undefined ? { y: 0, opacity: 1 } : undefined}
+      transition={{
+        delay: position !== undefined ? position * 0.03 : 0,
+        type: "spring",
+        stiffness: 500,
+        damping: 30,
+      }}
       style={{
-        WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
-        touchAction: "manipulation", // Improve touch handling
-        userSelect: "none", // Prevent text selection
+        WebkitTapHighlightColor: "transparent",
+        touchAction: "manipulation",
+        userSelect: "none",
       }}
     >
-      {/* Base shadow - simplified for better performance */}
-      <div className="absolute inset-0 bg-black/40 rounded-lg translate-y-[2px]"></div>
+      {/* Shadow layer */}
+      <div className="absolute inset-0 bg-black/40 rounded-2xl translate-y-1" />
 
-      {/* Tile base */}
-      <div className="absolute inset-0 bg-gradient-to-br from-zinc-800 to-black rounded-lg"></div>
+      {/* Tile body */}
+      <div className="absolute inset-0 bg-gradient-to-b from-zinc-600 to-zinc-800 rounded-2xl" />
 
-      {/* Tile face with letter */}
-      <div className="absolute inset-0.5 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-lg flex items-center justify-center text-white">
-        <span className="text-2xl">{letter}</span>
+      {/* Tile face */}
+      <div className="absolute inset-[3px] bg-gradient-to-b from-zinc-500 to-zinc-700 rounded-[13px] flex items-center justify-center">
+        <span className="text-2xl sm:text-3xl font-bold text-white drop-shadow-sm">{letter}</span>
       </div>
 
-      {/* Highlight effect - simplified for better performance */}
-      <div className="absolute inset-x-0 top-0 h-1/5 bg-white/10 rounded-t-lg"></div>
-    </motion.div>
+      {/* Top shine */}
+      <div className="absolute inset-x-2 top-1.5 h-3 bg-gradient-to-b from-white/20 to-transparent rounded-t-xl" />
+    </motion.button>
   )
 })
 
@@ -66,16 +59,19 @@ interface SelectedLetterProps {
 
 export const SelectedLetter = memo(function SelectedLetter({ letter, onClick, index }: SelectedLetterProps) {
   return (
-    <motion.div
-      className="relative w-10 h-10 bg-gradient-to-br from-orange-500/80 to-orange-600/80 rounded-lg flex items-center justify-center text-xl font-bold cursor-pointer shadow-md touch-manipulation"
+    <motion.button
+      className="relative w-11 h-11 sm:w-12 sm:h-12 bg-primary rounded-xl flex items-center justify-center cursor-pointer shadow-md shadow-primary/30 touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground active:scale-95 transition-transform"
       onClick={onClick}
-      initial={{ opacity: 0, scale: 0.8, y: 10 }}
+      initial={{ opacity: 0, scale: 0.5, y: 12 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.8, y: -10 }}
-      whileTap={{ scale: 0.95 }}
+      exit={{ opacity: 0, scale: 0.5, y: -12 }}
+      whileTap={{ scale: 0.9 }}
       transition={{
         duration: 0.2,
-        delay: index * 0.03,
+        delay: index * 0.02,
+        type: "spring",
+        stiffness: 500,
+        damping: 30,
       }}
       style={{
         WebkitTapHighlightColor: "transparent",
@@ -83,8 +79,8 @@ export const SelectedLetter = memo(function SelectedLetter({ letter, onClick, in
         userSelect: "none",
       }}
     >
-      <span className="text-white text-xl">{letter}</span>
-    </motion.div>
+      <span className="text-xl sm:text-2xl font-bold text-primary-foreground">{letter}</span>
+    </motion.button>
   )
 })
 
@@ -96,16 +92,16 @@ interface EmptyTileProps {
 export const EmptyTile = memo(function EmptyTile({ onClick, letter }: EmptyTileProps) {
   return (
     <motion.div
-      className="w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center text-xl font-bold bg-zinc-700/50 rounded-lg cursor-pointer touch-manipulation"
+      className="w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center bg-muted/30 rounded-2xl cursor-pointer touch-manipulation border border-border/30"
       whileTap={{ scale: 0.97 }}
       onClick={onClick}
       style={{
-        WebkitTapHighlightColor: "transparent", // Remove tap highlight on mobile
-        touchAction: "manipulation", // Improve touch handling
-        userSelect: "none", // Prevent text selection
+        WebkitTapHighlightColor: "transparent",
+        touchAction: "manipulation",
+        userSelect: "none",
       }}
     >
-      {letter}
+      {letter && <span className="text-muted-foreground">{letter}</span>}
     </motion.div>
   )
 })
